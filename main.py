@@ -1,86 +1,117 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
+from typing import Tuple, Dict, List
+import time
 
-def mask_result(frame, results, class_names, colors):
-    annotated_frame = frame.copy()  # Salin frame asli
+def apply_mask_and_annotations(
+    frame: np.ndarray,
+    results,
+    class_names: List[str],
+    colors: Dict[str, Tuple[int, int, int]]
+) -> np.ndarray:
+    """
+    Apply masks and annotations to a frame based on detection results
+    """
+    annotated_frame = frame.copy()
+    
+    if results.masks is not None:
+        for det_idx, (box, cls, conf) in enumerate(zip(results.boxes.xyxy, 
+                                                     results.boxes.cls, 
+                                                     results.boxes.conf)):
+            class_name = class_names[int(cls)]
+            color = colors[class_name]
 
-    if len(results) > 0:
-        detection = results[0]  # Ambil hasil untuk frame ini
+            # Apply mask if available
+            if results.masks is not None and len(results.masks.data) > det_idx:
+                mask = results.masks.data[det_idx].cpu().numpy()
+                mask = (mask * 255).astype(np.uint8)
+                colored_mask = np.zeros_like(frame)
+                colored_mask[mask > 0] = color
+                annotated_frame = cv2.addWeighted(annotated_frame, 1, colored_mask, 0.5, 0)
 
-        # Cek apakah mask tersedia
-        if detection.masks is not None:  
-            print(f"Hasil mask: {detection.masks}")
-            for det_idx, (box, cls, conf) in enumerate(
-                zip(detection.boxes.xyxy, detection.boxes.cls, detection.boxes.conf)
-            ):
-                # Nama kelas dan warna
-                class_name = class_names[int(cls)]
-                color = colors[class_name]
-
-                # Proses mask
-                if len(detection.masks.data) > det_idx:  # Cek apakah mask untuk deteksi ini ada
-                    mask = detection.masks.data[det_idx].cpu().numpy()
-                    mask = (mask * 255).astype(np.uint8)  # Skala mask menjadi 0-255
-
-                    # Buat mask berwarna
-                    colored_mask = np.zeros_like(frame)
-                    colored_mask[mask > 0] = color
-
-                    # Gabungkan mask berwarna dengan frame
-                    annotated_frame = cv2.addWeighted(annotated_frame, 1, colored_mask, 0.5, 0)
-
-                # Bounding box
-                box = box.cpu().numpy().astype(int)
-                cv2.rectangle(annotated_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
-
-                # Label
-                label = f'{class_name} {conf:.2f}'
-                cv2.putText(annotated_frame, label, (box[0], box[1] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
+            # Draw bounding box and label
+            box = box.cpu().numpy().astype(int)
+            cv2.rectangle(annotated_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+            label = f'{class_name} {conf:.2f}'
+            cv2.putText(annotated_frame, label, (box[0], box[1] - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
     return annotated_frame
-class_names = ['tampak depan', 'tampak samping', 'truck']
 
-# Contoh warna untuk setiap kelas
-colors = {
-    'tampak depan': (255, 0, 0),  # Merah
-    'tampak samping': (0, 255, 0),     # Hijau
-    'truck': (0, 0, 255)    # Biru
-}
+def detect_vehicles(video_paths: List[str]):
+    """
+    Detect vehicles from multiple video sources
+    """
+    model = YOLO('best.pt')
+    
+    vehicle_classes = [0, 1, 2] 
+    class_names = ['tampak depan', 'tampak samping', 'truck']
 
-model = YOLO('yolov8n-seg.pt')
+    colors = {
+        'tampak depan': (0, 255, 0),
+        'tampak samping': (255, 0, 0),
+        'truck': (0, 255, 255)
+    }
+    
+    video_size = (640, 480)
+    
+    # Initialize video captures
+    caps = [cv2.VideoCapture(path) for path in video_paths]
+    
+    # Check if all video captures are opened successfully
+    if not all(cap.isOpened() for cap in caps):
+        print("Error: Couldn't open one or more video sources")
+        return
 
-cap1 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0795.mp4")
-cap2 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0795.mp4")
+    windows = [f'Vehicle Detection - Camera {i+1}' for i in range(len(caps))]
+    for window in windows:
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
-if not cap1.isOpened() or not cap2.isOpened():
-    print("Error: Could not open video/camera")
-    exit()
+    # Initialize FPS variables for each camera
+    fps_start_times = [0] * len(caps)
+    fps_counters = [0] * len(caps)
+    fps_values = [0] * len(caps)
 
-while True:
-    ret1, frame1 = cap1.read()
-    ret2, frame2 = cap2.read()
+    while True:
+        frames = []
+        # Read frames from all cameras
+        for cap in caps:
+            ret, frame = cap.read()
+            if not ret:
+                print("Error: Couldn't read frame from one or more sources")
+                return
+            frame = cv2.resize(frame, video_size)
+            frames.append(frame)
+        
+        # Process each frame
+        for i, frame in enumerate(frames):
+            results = model(frame, classes=vehicle_classes, conf=0.25)[0]
+            
+            # Apply masks and annotations using the separate function
+            annotated_frame = apply_mask_and_annotations(frame, results, class_names, colors)
+            
+            # Display the result
+            cv2.imshow(windows[i], annotated_frame)
+        
+        # Break the loop if 'q' is pressed
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord('p'):
+            is_paused = not is_paused
+            status = "PAUSED" if is_paused else "PLAYING"
+            print(f"Video {status}")
 
-    frame1 = cv2.resize(frame1, (640, 480))
-    frame2 = cv2.resize(frame2, (640, 480))
+    # Cleanup
+    for cap in caps:
+        cap.release()
+    cv2.destroyAllWindows()
 
-    if not ret1 or not ret2:
-        print("End of video or camera stream")
-        break
-
-    result1 = model(frame1)
-    result2 = model(frame2)
-
-    combined_mask1 = mask_result(frame1, result1,class_names, colors)
-    combined_mask2 = mask_result(frame2, result2,class_names, colors)
-
-    cv2.imshow('YOLOv8 Segmentation', combined_mask1)
-    #cv2.imshow('YOLOv8 ', masked_frame1)
-
-    if cv2.waitKey(1) & 0xFF == ord ('q'):
-        break
-
-cap1.release()
-cap2.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    # Example usage with two video sources
+    video_paths = [
+        "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Compressed/IPS_2024-01-27.14.30.40.3410.mp4",
+        "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/video test raw.mov",
+    ]
+    detect_vehicles(video_paths)
