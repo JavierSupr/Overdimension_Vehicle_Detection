@@ -74,6 +74,7 @@ def detect_vehicles(video_paths: List[str]):
     fps_values = [0] * len(caps)
 
     while True:
+        start_time = time.time()
         frames = []
         # Read frames from all cameras
         for cap in caps:
@@ -91,6 +92,8 @@ def detect_vehicles(video_paths: List[str]):
             # Apply masks and annotations using the separate function
             annotated_frame = apply_mask_and_annotations(frame, results, class_names, colors)
             
+            fps = 1 / (time.time() - start_time)
+            cv2.putText(annotated_frame, f"FPS: {fps:.2f}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             # Display the result
             cv2.imshow(windows[i], annotated_frame)
         
