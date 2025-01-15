@@ -4,11 +4,19 @@ import numpy as np
 from typing import Tuple, Dict, List
 import time
 from matching_and_tracking import initialize, match_feature
+import websockets
+from stream_handler import video_stream, start_stream_server
+import asyncio
 
 
-def apply_detections_and_bounding_box(frame: np.ndarray, results, class_names: List[str]) -> Tuple[np.ndarray, List[str, float]]:
+
+def apply_detections_and_bounding_box(
+    frame: np.ndarray, 
+    results, 
+    class_names: List[str]
+) -> Tuple[np.ndarray, List[Tuple[str, float]]]:
     """
-    Apply bounding boxes and labels to a frame
+    Apply bounding boxes and labels to a frame.
     """
     annotated_frame = frame.copy()
     detections = []
@@ -18,8 +26,8 @@ def apply_detections_and_bounding_box(frame: np.ndarray, results, class_names: L
         xmin, ymin, xmax, ymax = box
         width = xmax - xmin
         height = ymax - ymin
-        
-        detections.append(([xmin, ymin, width, height], conf, cls))
+
+        detections.append(([xmin, ymin, width, height], conf, class_name))
         color = (0, 255, 0)  # You can dynamically assign colors per class
         cv2.rectangle(annotated_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
         label = f'{class_name} {conf:.2f}'
@@ -77,64 +85,74 @@ def detect_vehicles(video_paths: List[str]):
 
     is_paused = False
 
+    shared_frames = [None] * len(caps)
     descriptors = [None] * len(caps)
     tracks = [None] * len(caps)
     keypoints = [None] * len(caps)
 
-    while True:
-        start_time = time.time()
+    async def process():
+        while True:
+            start_time = time.time()
 
-        frames = []
+            frames = []
+            for cap in caps:
+                ret, frame = cap.read()
+                if not ret:
+                    print("Error: Couldn't read frame from one or more sources")
+                    return
+                frame = cv2.resize(frame, video_size)
+                frames.append(frame)
+
+            if not is_paused:
+                for i, frame in enumerate(frames):
+                    results = model(frame, conf=0.25)[0]
+
+                    # Apply bounding boxes
+                    annotated_frame, detections = apply_detections_and_bounding_box(frame, results, class_names)
+#   
+                    #descriptors[i], tracks[i], keypoints[i] = initialize(detections, frame)
+#   
+                    #if i == 1 and descriptors[0] and descriptors[1]:
+                    #    match_feature(descriptors[0], descriptors[1], tracks[0], tracks[1], keypoints[0], keypoints[1])
+
+
+                    # Apply masks if available
+                    annotated_frame = apply_mask_and_annotations(
+                        annotated_frame, results, colors
+                    )
+
+                    # Calculate FPS
+                    fps = 1 / (time.time() - start_time)
+                    cv2.putText(
+                        annotated_frame, f"FPS: {fps:.2f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+                    )
+
+                    # Display the result
+                    cv2.imshow(windows[i], annotated_frame)
+                    
+                    shared_frames[i] = annotated_frame
+
+            # Handle key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('p'):
+                is_paused = not is_paused
+                status = "PAUSED" if is_paused else "PLAYING"
+                print(f"Video {status}")
+
         for cap in caps:
-            ret, frame = cap.read()
-            if not ret:
-                print("Error: Couldn't read frame from one or more sources")
-                return
-            frame = cv2.resize(frame, video_size)
-            frames.append(frame)
-
-        if not is_paused:
-            for i, frame in enumerate(frames):
-                results = model(frame, conf=0.25)[0]
-
-                # Apply bounding boxes
-                annotated_frame, detections = apply_detections_and_bounding_box(frame, results, class_names)
-
-                descriptors[i], tracks[i], keypoints[i] = initialize(detections, frame)
-
-                if i == 1 and descriptors[0] and descriptors[1]:
-                    match_feature(descriptors[0], descriptors[1], tracks[0], tracks[1], keypoints[0], keypoints[1])
-
-
-                # Apply masks if available
-                annotated_frame = apply_mask_and_annotations(
-                    annotated_frame, results, class_names, colors
-                )
-
-                # Calculate FPS
-                fps = 1 / (time.time() - start_time)
-                cv2.putText(
-                    annotated_frame, f"FPS: {fps:.2f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
-                )
-
-                # Display the result
-                cv2.imshow(windows[i], annotated_frame)
-
-        # Handle key presses
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('p'):
-            is_paused = not is_paused
-            status = "PAUSED" if is_paused else "PLAYING"
-            print(f"Video {status}")
-
-    for cap in caps:
-        cap.release()
-    cv2.destroyAllWindows()
-
-
+            cap.release()
+        cv2.destroyAllWindows()
+    loop = asyncio.get_event_loop()
+    try:
+        asyncio.ensure_future(start_stream_server(shared_frames[0], shared_frames[1]))
+        loop.run_until_complete(process)
+    except KeyboardInterrupt:
+        print("Exiting...")
+        loop.stop()
+        
 if __name__ == "__main__":
     # Example usage with two video sources
     video_paths = [
