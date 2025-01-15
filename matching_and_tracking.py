@@ -3,7 +3,7 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 import numpy as np
 
 deepsort = DeepSort(max_age=5)
-sift = cv2.SIFT()
+sift = cv2.SIFT_create()
 bf = cv2.BFMatcher()
 id_mappings = {}
 
