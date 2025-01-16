@@ -61,12 +61,22 @@ def apply_mask_and_annotations(
 
     return annotated_frame
 
-def detect_vehicles(video_paths: List[str]):
-    """
-    Detect vehicles from multiple video sources
-    """
-    model = YOLO('yolov8n-seg.pt')
+async def handle_websocket(websocket):
+    global shared_frames
+    await video_stream(websocket, shared_frames[0], shared_frames[1])
 
+async def start_websocket_server():
+    async with websockets.serve(handle_websocket, "localhost", 8765):
+        await asyncio.Future()  # run forever
+
+async def detect_vehicles(video_paths: List[str]):
+    """
+    Detect vehicles from multiple video sources and stream via WebSocket
+    """
+    global shared_frames
+    shared_frames = [None, None]
+    
+    model = YOLO('yolov8n-seg.pt')
     class_names = model.names
     colors = {cls_idx: tuple(np.random.randint(0, 256, 3).tolist()) for cls_idx in class_names}
     video_size = (640, 480)
@@ -74,23 +84,11 @@ def detect_vehicles(video_paths: List[str]):
     # Initialize video captures
     caps = [cv2.VideoCapture(path) for path in video_paths]
 
-    # Check if all video captures are opened successfully
     if not all(cap.isOpened() for cap in caps):
         print("Error: Couldn't open one or more video sources")
         return
 
-    windows = [f'Vehicle Detection - Camera {i + 1}' for i in range(len(caps))]
-    for window in windows:
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-
-    is_paused = False
-
-    shared_frames = [None] * len(caps)
-    descriptors = [None] * len(caps)
-    tracks = [None] * len(caps)
-    keypoints = [None] * len(caps)
-
-    async def process():
+    try:
         while True:
             start_time = time.time()
 
@@ -103,60 +101,39 @@ def detect_vehicles(video_paths: List[str]):
                 frame = cv2.resize(frame, video_size)
                 frames.append(frame)
 
-            if not is_paused:
-                for i, frame in enumerate(frames):
-                    results = model(frame, conf=0.25)[0]
+            for i, frame in enumerate(frames):
+                results = model(frame, conf=0.25)[0]
+                annotated_frame, detections = apply_detections_and_bounding_box(frame, results, class_names)
+                annotated_frame = apply_mask_and_annotations(annotated_frame, results, colors)
 
-                    # Apply bounding boxes
-                    annotated_frame, detections = apply_detections_and_bounding_box(frame, results, class_names)
-#   
-                    #descriptors[i], tracks[i], keypoints[i] = initialize(detections, frame)
-#   
-                    #if i == 1 and descriptors[0] and descriptors[1]:
-                    #    match_feature(descriptors[0], descriptors[1], tracks[0], tracks[1], keypoints[0], keypoints[1])
+                fps = 1 / (time.time() - start_time)
+                cv2.putText(
+                    annotated_frame, f"FPS: {fps:.2f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
+                )
 
+                shared_frames[i] = annotated_frame
 
-                    # Apply masks if available
-                    annotated_frame = apply_mask_and_annotations(
-                        annotated_frame, results, colors
-                    )
+            await asyncio.sleep(0.01)  # Small delay to prevent CPU overload
 
-                    # Calculate FPS
-                    fps = 1 / (time.time() - start_time)
-                    cv2.putText(
-                        annotated_frame, f"FPS: {fps:.2f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
-                    )
-
-                    # Display the result
-                    cv2.imshow(windows[i], annotated_frame)
-                    
-                    shared_frames[i] = annotated_frame
-
-            # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('p'):
-                is_paused = not is_paused
-                status = "PAUSED" if is_paused else "PLAYING"
-                print(f"Video {status}")
-
+    except Exception as e:
+        print(f"Error in detection loop: {e}")
+    finally:
         for cap in caps:
             cap.release()
-        cv2.destroyAllWindows()
-    loop = asyncio.get_event_loop()
-    try:
-        asyncio.ensure_future(start_stream_server(shared_frames[0], shared_frames[1]))
-        loop.run_until_complete(process)
-    except KeyboardInterrupt:
-        print("Exiting...")
-        loop.stop()
-        
-if __name__ == "__main__":
-    # Example usage with two video sources
+
+async def main():
     video_paths = [
         "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4",
         "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4",
     ]
-    detect_vehicles(video_paths)
+    
+    # Create tasks for both the detection and websocket server
+    detection_task = asyncio.create_task(detect_vehicles(video_paths))
+    websocket_task = asyncio.create_task(start_websocket_server())
+    
+    # Wait for both tasks
+    await asyncio.gather(detection_task, websocket_task)
+
+if __name__ == "__main__":
+    asyncio.run(main())
