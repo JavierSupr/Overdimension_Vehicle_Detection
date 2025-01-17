@@ -2,13 +2,10 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 from typing import Tuple, Dict, List
-import time
-from matching_and_tracking import initialize, match_feature
 import websockets
-from stream_handler import video_stream, start_stream_server
 import asyncio
-
-
+import base64
+import json
 
 def apply_detections_and_bounding_box(
     frame: np.ndarray, 
@@ -28,7 +25,7 @@ def apply_detections_and_bounding_box(
         height = ymax - ymin
 
         detections.append(([xmin, ymin, width, height], conf, class_name))
-        color = (0, 255, 0)  # You can dynamically assign colors per class
+        color = (0, 255, 0)
         cv2.rectangle(annotated_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
         label = f'{class_name} {conf:.2f}'
         cv2.putText(
@@ -37,7 +34,6 @@ def apply_detections_and_bounding_box(
         )
 
     return annotated_frame, detections
-
 
 def apply_mask_and_annotations(
     annotated_frame: np.ndarray,
@@ -50,8 +46,6 @@ def apply_mask_and_annotations(
     if results.masks is not None:
         for det_idx, cls in enumerate(results.boxes.cls):
             color = colors[int(cls)]
-
-            # Apply mask if available
             if len(results.masks.data) > det_idx:
                 mask = results.masks.data[det_idx].cpu().numpy()
                 mask = (mask * 255).astype(np.uint8)
@@ -61,79 +55,89 @@ def apply_mask_and_annotations(
 
     return annotated_frame
 
-async def handle_websocket(websocket):
-    global shared_frames
-    await video_stream(websocket, shared_frames[0], shared_frames[1])
-
-async def start_websocket_server():
-    async with websockets.serve(handle_websocket, "localhost", 8765):
-        await asyncio.Future()  # run forever
-
-async def detect_vehicles(video_paths: List[str]):
+async def process_and_stream_frames(websocket, model, cap1, cap2):
     """
-    Detect vehicles from multiple video sources and stream via WebSocket
+    Combined processing and streaming of frames to ensure fresh frames are always sent
     """
-    global shared_frames
-    shared_frames = [None, None]
-    
+    try:
+        class_names = model.names
+        colors = {cls_idx: tuple(np.random.randint(0, 256, 3).tolist()) 
+                 for cls_idx in class_names}
+
+        while True:
+            # Read frames
+            ret1, frame1 = cap1.read()
+            ret2, frame2 = cap2.read()
+            
+            if not ret1 or not ret2:
+                # Reset videos if they end
+                cap1.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                cap2.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret1, frame1 = cap1.read()
+                ret2, frame2 = cap2.read()
+
+            # Resize frames
+            frame1 = cv2.resize(frame1, (640, 480))
+            frame2 = cv2.resize(frame2, (640, 480))
+
+            # Process frames with YOLO
+            results1 = model(frame1, conf=0.25)[0]
+            results2 = model(frame2, conf=0.25)[0]
+
+            # Apply detections and masks
+            frame1, _ = apply_detections_and_bounding_box(frame1, results1, class_names)
+            frame2, _ = apply_detections_and_bounding_box(frame2, results2, class_names)
+
+            frame1 = apply_mask_and_annotations(frame1, results1, colors)
+            frame2 = apply_mask_and_annotations(frame2, results2, colors)
+
+            # Encode and send frames
+            _, buffer1 = cv2.imencode('.jpg', frame1)
+            frame1_based64 = base64.b64encode(buffer1).decode('utf-8')
+            message1 = json.dumps({"type": "frame", "camera": "Camera 1", "data": frame1_based64})
+            await websocket.send(message1)
+
+            _, buffer2 = cv2.imencode('.jpg', frame2)
+            frame2_based64 = base64.b64encode(buffer2).decode('utf-8')
+            message2 = json.dumps({"type": "frame", "camera": "Camera 2", "data": frame2_based64})
+            await websocket.send(message2)
+
+            await asyncio.sleep(0.03)  # Control frame rate
+
+    except websockets.exceptions.ConnectionClosedError as e:
+        print(f"WebSocket Connection closed with error: {e}")
+    except websockets.exceptions.ConnectionClosedOK:
+        print("WebSocket closed normally")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        print("WebSocket closed, releasing resources.")
+
+async def handle_connection(websocket):
+    # Initialize YOLO model
     model = YOLO('yolov8n-seg.pt')
-    class_names = model.names
-    colors = {cls_idx: tuple(np.random.randint(0, 256, 3).tolist()) for cls_idx in class_names}
-    video_size = (640, 480)
-
+    
     # Initialize video captures
-    caps = [cv2.VideoCapture(path) for path in video_paths]
-
-    if not all(cap.isOpened() for cap in caps):
-        print("Error: Couldn't open one or more video sources")
-        return
+    cap1 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20250111_121008.mp4")
+    cap2 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0795.mp4")
 
     try:
-        while True:
-            start_time = time.time()
-
-            frames = []
-            for cap in caps:
-                ret, frame = cap.read()
-                if not ret:
-                    print("Error: Couldn't read frame from one or more sources")
-                    return
-                frame = cv2.resize(frame, video_size)
-                frames.append(frame)
-
-            for i, frame in enumerate(frames):
-                results = model(frame, conf=0.25)[0]
-                annotated_frame, detections = apply_detections_and_bounding_box(frame, results, class_names)
-                annotated_frame = apply_mask_and_annotations(annotated_frame, results, colors)
-
-                fps = 1 / (time.time() - start_time)
-                cv2.putText(
-                    annotated_frame, f"FPS: {fps:.2f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
-                )
-
-                shared_frames[i] = annotated_frame
-
-            await asyncio.sleep(0.01)  # Small delay to prevent CPU overload
-
+        await process_and_stream_frames(websocket, model, cap1, cap2)
     except Exception as e:
-        print(f"Error in detection loop: {e}")
+        print(f"Error in handle_connection: {e}")
     finally:
-        for cap in caps:
-            cap.release()
+        cap1.release()
+        cap2.release()
 
 async def main():
-    video_paths = [
-        "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4",
-        "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4",
-    ]
-    
-    # Create tasks for both the detection and websocket server
-    detection_task = asyncio.create_task(detect_vehicles(video_paths))
-    websocket_task = asyncio.create_task(start_websocket_server())
-    
-    # Wait for both tasks
-    await asyncio.gather(detection_task, websocket_task)
+    async with websockets.serve(handle_connection, "localhost", 8765):
+        print("WebSocket server started on ws://localhost:8765")
+        await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
