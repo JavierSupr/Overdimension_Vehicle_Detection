@@ -41,13 +41,14 @@ def initialize(detections,frame):
     keypoints, descriptor = [], []
 
     for track in tracks:
+        print(f"track 2 {track}")
         kp, des = extract_sift_features(track, gray_frame)
         if kp:
             keypoints.extend(kp)
             if des is not None:
                 descriptor.extend(des)
 
-    return descriptor, tracks, keypoints
+    #return descriptor, keypoints
 def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
     """Update ID mappings based on SIFT matches"""
     # Create a mapping of matches per track
