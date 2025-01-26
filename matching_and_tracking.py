@@ -35,18 +35,40 @@ def extract_sift_features(track, gray_frame):
 
     return kp, des
 
-def initialize(detections,frame):
-    tracks = deepsort.update_tracks(detections, frame)
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    keypoints, descriptor = [], []
+def process_tracks_and_extract_features(deepsort, detections, frame):
+    """
+    Updates tracks using DeepSORT, converts frame to grayscale,
+    and extracts SIFT features for tracked objects.
+    
+    Args:
+        deepsort: DeepSORT object for tracking.
+        detections: List of detections to be processed.
+        frame: The current video frame.
+    
+    Returns:
+        keypoints: List of extracted keypoints.
+        descriptors: List of extracted descriptors.
+    """
+    # Update tracks with detections
+    tracks = deepsort.update_tracks(detections, frame=frame)
 
+    # Convert frame to grayscale for SIFT processing
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Initialize lists for keypoints and descriptors
+    keypoints, descriptors = [], []
+
+    # Process each track to extract SIFT features
+    #tracks = deepsort.tracks  # Assuming `deepsort.tracks` gives active tracks
     for track in tracks:
-        print(f"track 2 {track}")
+        print(f"Processing track: {track}")
         kp, des = extract_sift_features(track, gray_frame)
         if kp:
             keypoints.extend(kp)
             if des is not None:
-                descriptor.extend(des)
+                descriptors.extend(des)
+
+    return keypoints, descriptors, tracks
 
     #return descriptor, keypoints
 def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
@@ -110,3 +132,30 @@ def match_feature(descriptor1, descriptor2, tracks1, tracks2, keypoints1, keypoi
             update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches)
         except Exception as e:
             print(f"Error in feature matching: {e}")
+
+
+def draw_tracking_info(frame, tracks, is_cam1=True):
+    """Draw tracking information on the frame"""
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+            
+        track_id = track.track_id
+        if not is_cam1:
+            # Use mapped ID from camera 1 if available
+            track_id = id_mappings.get(track_id, track_id)
+            
+        ltrb = track.to_ltrb()
+        x1, y1, x2, y2 = map(int, ltrb)
+        class_id = track.det_class
+        #class_name = yolo_model.names[class_id]
+
+        # Draw bounding box
+        color = (0, 255, 0)  # Green for tracked objects
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        
+        # Draw ID and class name
+        label = f'ID: {track_id}'
+        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    return frame
