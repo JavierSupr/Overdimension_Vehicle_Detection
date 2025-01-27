@@ -12,7 +12,7 @@ from id_merging import merge_track_ids
 deepsort1 = DeepSort(max_age=5)
 deepsort2 = DeepSort(max_age=5)
 sift = cv2.SIFT_create()
-iou_threshold = 0.5
+iou_threshold = 0.2
 
 def apply_detections_and_bounding_box(
     frame: np.ndarray, 
@@ -98,7 +98,7 @@ async def process_and_stream_frames(websocket, model, cap1, cap2):
             # Process frames with YOLO
             results1 = model.predict(frame1, task='segment', conf=0.25)[0]
             results2 = model.predict(frame2, task='segment', conf=0.25)[0]
-            print(f"result {results1}")
+            #print(f"result {results1}")
             # Apply detections and masks
             detections1 = apply_detections_and_bounding_box(frame1, results1, class_names)
             detections2 = apply_detections_and_bounding_box(frame2, results2, class_names)
@@ -128,7 +128,7 @@ async def process_and_stream_frames(websocket, model, cap1, cap2):
                 cv2.putText(frame1_tracked, f"ID: {merged_track_id}", (int(x1), int(y1) - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-    # Di        splay the annotated frame (optional)
+                # Display the annotated frame (optional)
                 cv2.imshow('Annotated Frame', frame1_tracked)
             #frame1 = apply_mask_and_annotations(frame1, results1, colors)
             #frame2 = apply_mask_and_annotations(frame2, results2, colors)
