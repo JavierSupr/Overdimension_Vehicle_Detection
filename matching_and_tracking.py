@@ -10,6 +10,7 @@ id_mappings = {}
 def extract_sift_features(track, gray_frame):
     if not track.is_confirmed():
         return [], None
+    
     ltrb = track.to_ltrb()
     x1,y1,x2,y2 = map(int, ltrb)
 
@@ -31,7 +32,7 @@ def extract_sift_features(track, gray_frame):
 
     if kp is not None:
         for kp_item in kp:
-            kp_item.pt = (kp_item.pt[0] + x1, kp_item.pt[1] + 1)
+            kp_item.pt = (kp_item.pt[0] + x1, kp_item.pt[1] + y1)
 
     return kp, des
 
@@ -51,29 +52,25 @@ def process_tracks_and_extract_features(deepsort, detections, frame):
     """
     # Update tracks with detections
     tracks = deepsort.update_tracks(detections, frame=frame)
-
-    # Convert frame to grayscale for SIFT processing
+    
+    # Convert frame to grayscale for SIFT
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # Initialize lists for keypoints and descriptors
+    
+    # Initialize keypoints and descriptors lists
     keypoints, descriptors = [], []
-
-    # Process each track to extract SIFT features
-    #tracks = deepsort.tracks  # Assuming `deepsort.tracks` gives active tracks
+    
+    # Extract SIFT features for tracked objects
     for track in tracks:
-        print(f"Processing track: {track}")
         kp, des = extract_sift_features(track, gray_frame)
         if kp:
             keypoints.extend(kp)
             if des is not None:
                 descriptors.extend(des)
-
-    return keypoints, descriptors, tracks
+    
+    return tracks, keypoints, descriptors
 
     #return descriptor, keypoints
 def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
-    """Update ID mappings based on SIFT matches"""
-    # Create a mapping of matches per track
     track1_matches = {}
     track2_matches = {}
     
@@ -85,11 +82,10 @@ def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
         if track2.is_confirmed():
             track2_matches[track2.track_id] = get_track_feature_points(track2, keypoints2, good_matches, False)
     
-    # Find tracks with the most matching features
     for track2_id, matches2 in track2_matches.items():
         if not matches2:
             continue
-            
+        
         best_track1_id = None
         max_matches = 0
         
@@ -99,12 +95,10 @@ def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
                 max_matches = common_matches
                 best_track1_id = track1_id
         
-        if max_matches >= 5:  # Threshold for minimum matches
+        if max_matches >= 2:  # Threshold for minimum matches
             id_mappings[track2_id] = best_track1_id
 
-
 def get_track_feature_points(track, keypoints, good_matches, is_cam1):
-    """Get the feature points associated with a specific track"""
     ltrb = track.to_ltrb()
     x1, y1, x2, y2 = map(int, ltrb)
     track_points = []
@@ -116,45 +110,60 @@ def get_track_feature_points(track, keypoints, good_matches, is_cam1):
     
     return track_points
 
-def match_feature(descriptor1, descriptor2, tracks1, tracks2, keypoints1, keypoints2):
+def match_features(descriptors1, descriptors2, tracks1, tracks2, keypoints1, keypoints2):
+    """
+    Match SIFT features between two frames and update ID mappings.
+    
+    Args:
+        descriptors1: SIFT descriptors from first frame
+        descriptors2: SIFT descriptors from second frame
+        tracks1: DeepSORT tracks from first frame
+        tracks2: DeepSORT tracks from second frame
+        keypoints1: SIFT keypoints from first frame
+        keypoints2: SIFT keypoints from second frame
+    
+    Returns:
+        list: List of good matches between frames
+    """
     good_matches = []
-    if descriptor1 and descriptor2:
+    
+    if descriptors1 and descriptors2:
         try:
-            descriptor1 = np.array(descriptor1)
-            descriptor2 = np.array(descriptor2)
-            matches = bf.knnMatch(descriptor1, descriptor2, k=2)
-
+            descriptors1 = np.array(descriptors1)
+            descriptors2 = np.array(descriptors2)
+            matches = bf.knnMatch(descriptors1, descriptors2, k=2)
+            
             for match_pair in matches:
                 if len(match_pair) == 2:
                     m, n = match_pair
                     if m.distance < 0.75 * n.distance:
                         good_matches.append(m)
+            
             update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches)
+            
         except Exception as e:
             print(f"Error in feature matching: {e}")
+    
+    return good_matches
 
 
 def draw_tracking_info(frame, tracks, is_cam1=True):
-    """Draw tracking information on the frame"""
     for track in tracks:
         if not track.is_confirmed():
             continue
-            
+        
         track_id = track.track_id
         if not is_cam1:
-            # Use mapped ID from camera 1 if available
             track_id = id_mappings.get(track_id, track_id)
-            
+        
         ltrb = track.to_ltrb()
         x1, y1, x2, y2 = map(int, ltrb)
-        class_id = track.det_class
-        #class_name = yolo_model.names[class_id]
-
+        
         # Draw bounding box
         color = (0, 255, 0)  # Green for tracked objects
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
-        # Draw ID and class name
+        # Draw ID
         label = f'ID: {track_id}'
         cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
