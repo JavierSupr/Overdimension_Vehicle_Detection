@@ -8,11 +8,14 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info
 from stream_handler import send_frame_via_websocket
 from id_merging import merge_track_ids
+from database import save_violation_to_mongodb, check_id_exists
 
 deepsort1 = DeepSort(max_age=5)
 deepsort2 = DeepSort(max_age=5)
 sift = cv2.SIFT_create()
 iou_threshold = 0.2
+processed_tracks = set()  
+estimated_height = 1.8
 
 def apply_detections_and_bounding_box(
     frame: np.ndarray, 
@@ -122,7 +125,9 @@ async def process_and_stream_frames(websocket, model, cap1, cap2):
                 bbox = track.to_ltwh()
                 x1, y1, w, h = bbox
                 x2, y2 = x1 + w, y1 + h
-
+                if not check_id_exists(merged_track_id):
+                    save_violation_to_mongodb(merged_track_id, estimated_height, frame1_tracked)
+                    processed_tracks.add(merged_track_id)
                 # Optionally: Draw annotations on the frame
                 cv2.rectangle(frame1_tracked, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                 cv2.putText(frame1_tracked, f"ID: {merged_track_id}", (int(x1), int(y1) - 10),
