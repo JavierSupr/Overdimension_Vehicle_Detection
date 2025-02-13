@@ -14,8 +14,8 @@ frame_queues = {
     "Camera 2": queue.Queue(maxsize=1),
 }
 
-async def receive_video(sock):
-    """Receive and yield video frames over UDP asynchronously."""
+def receive_video(sock, camera_name):
+    """Receives video frames over UDP in a separate thread."""
     global running
     while running:
         try:
@@ -38,10 +38,14 @@ async def receive_video(sock):
             frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
 
             if frame is not None:
-                cv2.imshow('frame', frame)
-                yield frame  # Yield the received frame
+                if not frame_queues[camera_name].full():
+                    frame_queues[camera_name].put(frame)
+
+                # Display video for debugging
+                cv2.imshow(camera_name, frame)
+                cv2.waitKey(1)
 
         except Exception as e:
-            print(f"[ERROR] Receiving video failed: {e}")
+            print(f"[ERROR] Receiving video from {camera_name} failed: {e}")
             running = False
             break

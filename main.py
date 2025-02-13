@@ -12,8 +12,9 @@ from matching_and_tracking import process_tracks_and_extract_features, match_fea
 from stream_handler import send_frame_via_websocket
 from id_merging import merge_track_ids
 from database import save_violation_to_mongodb, check_id_exists
-from video_receiver import receive_video
-
+#from video_receiver import receive_video
+import threading
+import queue
 deepsort1 = DeepSort(max_age=5)
 deepsort2 = DeepSort(max_age=5)
 sift = cv2.SIFT_create()
@@ -40,7 +41,51 @@ sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock_result.bind((UDP_IP, PORT_RESULT))
 
 # Flag to control the threads
+#running = True
+PORT_1 = 5005
+PORT_2 = 5006
+BUFFER_SIZE = 65536
 running = True
+
+# Shared frame queues
+frame_queues = {
+    "Camera 1": queue.Queue(maxsize=5),
+    "Camera 2": queue.Queue(maxsize=5),
+}
+
+def receive_video(sock, camera_name):
+    #"""Receives video frames over UDP in a separate thread."""
+    #running =True
+    #while running:
+        try:
+            print("yes")
+            # Receive number of chunks
+            data, _ = sock.recvfrom(BUFFER_SIZE)
+            if len(data) == 1:
+                chunks_count = struct.unpack("B", data)[0]
+            #else:
+                #continue  # Skip invalid packets
+
+            # Receive the chunks
+            chunks = []
+            for _ in range(chunks_count):
+                chunk, _ = sock.recvfrom(BUFFER_SIZE)
+                chunks.append(chunk)
+
+            # Combine chunks and decode frame
+            frame_data = b"".join(chunks)
+            np_data = np.frombuffer(frame_data, dtype=np.uint8)
+            frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
+
+            if frame is not None:
+                if not frame_queues[camera_name].full():
+                    frame_queues[camera_name].put(frame)
+
+        except Exception as e:
+            print(f"[ERROR] Receiving video from {camera_name} failed: {e}")
+            running = False
+            #break
+
 
 #def apply_detections_and_bounding_box(
 #    frame: np.ndarray, 
@@ -74,46 +119,67 @@ running = True
 
 #    return  detections
 
-def apply_detections_and_bounding_box(
-    frame: np.ndarray, 
-    class_names: List[str]
-) -> Tuple[np.ndarray, List[Tuple[str, float]]]:
-    """
-    Apply bounding boxes and labels to a frame.
-    """
-    annotated_frame = frame.copy()
-    detections = []
+def apply_detections_and_bounding_box():
+        """Fetches frames, applies bounding boxes, and displays them."""
+    #running = True
+    #global running
+    #while running:
+        print("yes1")
+        try:
+            if not any(not q.empty() for q in frame_queues.values()):
+                print("yes4")
+                #running = False
+                #continue  # Lewati iterasi jika semua frame_queues kosong
+                
+            for camera_name in frame_queues.keys():
+                if frame_queues[camera_name].empty():
+                    running = False
+                    continue  # Lewati iterasi ini jika queue kamera tertentu kosong
+                    
+                frame = frame_queues[camera_name].get()
+                print("yes2")
 
-    while True:
-        data, addr = sock_result.recvfrom(65535)  # Buffer size
-        message = json.loads(data.decode())
+                # Receive detection results
+                try:
+                    print("yes3")
+                    data, _ = sock_result.recvfrom(65535)  # Buffer size
+                    message = json.loads(data.decode())
 
-        #print(f"\nReceived from {addr}:")
-        #print(json.dumps(message, indent=4)) 
+                    for obj in message["objects"]:
+                        class_name = obj["label"]
+                        conf = float(obj["conf"])
+                        bbox = obj["bbox"]
 
-        for obj in message["objects"]:
-            class_name = obj["label"]  # Assign label to class_name
-            conf = float(obj["conf"])  # Extract confidence
-            bbox = obj["bbox"]  # Bounding box coordinates
+                        xmin, ymin, xmax, ymax = map(int, bbox)
+                        width, height = xmax - xmin, ymax - ymin
 
-            # Extract bounding box details
-            xmin = int(bbox[0])
-            ymin = int(bbox[1])
-            xmax = int(bbox[2])
-            ymax = int(bbox[3])
+                        # Draw bounding box
+                        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+                        cv2.putText(
+                            frame,
+                            f"{class_name} ({conf:.2f})",
+                            (xmin, ymin - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0, 255, 0),
+                            2,
+                        )
 
-            # Convert to width and height
-            width = xmax - xmin
-            height = ymax - ymin
+                    # Display the frame
+                    cv2.imshow(camera_name, frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        running = False
+                        break
 
-            cls = int(obj["id"])  # Extract class ID
+                except Exception as e:
+                    print(f"[ERROR] Receiving detection results failed: {e}")
+                    running = False
+                    break
 
-            detections.append(([xmin, ymin, width, height], conf, cls))
-
-            #print(f"Detected: {class_name} (ID: {cls}) | Conf: {conf}")
-            #print(f"Bounding Box: X:{xmin}, Y:{ymin}, W:{width}, H:{height}")
-        return detections
-
+        except Exception as e:
+            print(f"[ERROR] Receiving detection results failed: {e}")
+            running = False
+            #break
 
 def apply_mask_and_annotations(
     annotated_frame: np.ndarray,
@@ -144,32 +210,38 @@ def find_root(id_group, track_id):
         return track_id
 
 
-async def process_and_stream_frames(websocket, model):
+async def process_and_stream_frames(websocket):
     """
     Combined processing and streaming of frames to ensure fresh frames are always sent
     """
     try:
+
         class_names = model.names
         print(class_names)
         colors = {cls_idx: tuple(np.random.randint(0, 256, 3).tolist()) 
                  for cls_idx in class_names}
         print("masuk siniii2")
+        video_task1 = asyncio.create_task(receive_video(sock1).__anext__())
+        video_task2 = asyncio.create_task(receive_video(sock2).__anext__())
+        inference_task = asyncio.create_task(apply_detections_and_bounding_box())
         while running:
+            print("masuk")
             frame1, frame2 = await asyncio.gather(receive_video(sock1).__anext__(), receive_video(sock2).__anext__())
-
-            frame1 = cv2.resize(frame1, (640, 480))
-            frame2 = cv2.resize(frame2, (640, 480))
-
-            # Process frames with YOLO
+            detections = await asyncio.gather(apply_detections_and_bounding_box().__anext__())
+        
+#print(f"Frame1 shape: {frame1.shape}, Frame2 shape: {frame2.shape}")
+            frame1 = cv2.resize(frame1, (256, 256))
+            frame2 = cv2.resize(frame2, (256, 256))
+             #Process frames with YOLO
             #results1 = model.predict(frame1, task='segment', conf=0.25)[0]
             #results2 = model.predict(frame2, task='segment', conf=0.25)[0]
-            # Apply detections and masks
-            detections1 = apply_detections_and_bounding_box(frame1, class_names)
-            detections2 = apply_detections_and_bounding_box(frame2, class_names)
+             #Apply detections and masks
+            apply_detections_and_bounding_box()
+            detections2 = apply_detections_and_bounding_box(frame2)
     
             tracks1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort1, detections1, frame1)
             tracks2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort2, detections2, frame2)
-    
+    #
             good_matches = match_features(descriptors1, descriptors2, tracks1, tracks2, keypoints1, keypoints2)
             
             frame1_tracked = draw_tracking_info(frame1.copy(), tracks1, is_cam1=True)
@@ -182,7 +254,7 @@ async def process_and_stream_frames(websocket, model):
                 
                 # Find the root (merged) ID for this track
                 merged_track_id = find_root(id_group, track.track_id)
-                print(merged_track_id)
+                #print(merged_track_id)
 
                 bbox = track.to_ltwh()
                 x1, y1, w, h = bbox
@@ -191,27 +263,27 @@ async def process_and_stream_frames(websocket, model):
                     save_violation_to_mongodb(merged_track_id, estimated_height, frame1_tracked)
                     processed_tracks.add(merged_track_id)
                 # Optionally: Draw annotations on the frame
-                cv2.rectangle(frame1_tracked, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                #cv2.rectangle(frame1_tracked, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                 cv2.putText(frame1_tracked, f"ID: {merged_track_id}", (int(x1), int(y1) - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                # Display the annotated frame (optional)
-                cv2.imshow('Annotated Frame', frame1_tracked)
-            #frame1 = apply_mask_and_annotations(frame1, results1, colors)
-            #frame2 = apply_mask_and_annotations(frame2, results2, colors)
+               # Display the annotated frame (optional)
+               #cv2.imshow('Annotated Frame', frame1_tracked)
+            frame1 = apply_mask_and_annotations(frame1, results1, colors)
+            frame2 = apply_mask_and_annotations(frame2, results2, colors)
             if good_matches:
                 frame_matches = cv2.drawMatches(frame1_tracked, keypoints1, frame2_tracked, keypoints2, good_matches, None,
                                               flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-                #frame_matches = cv2.hconcat([frame1_tracked, frame2_tracked])
-            else:
                 frame_matches = cv2.hconcat([frame1_tracked, frame2_tracked])
-            
+            else:
+               frame_matches = cv2.hconcat([frame1_tracked, frame2_tracked])
+        
             cv2.imshow('YOLOv8 Vehicle Tracking with DeepSORT and SIFT Matching', frame_matches)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-            await send_frame_via_websocket(websocket, frame1_tracked, "Camera 1")
-            await send_frame_via_websocket(websocket, frame2_tracked, "Camera 2")
+            await send_frame_via_websocket(websocket, frame1, "Camera 1")
+            await send_frame_via_websocket(websocket, frame2, "Camera 2")
     
     except websockets.exceptions.ConnectionClosedError as e:
         print(f"WebSocket Connection closed with error: {e}")
@@ -225,7 +297,7 @@ async def process_and_stream_frames(websocket, model):
 async def handle_connection(websocket):
     # Initialize YOLO model
     #model = YOLO('yolov8n-seg.pt')
-    model = YOLO('best.pt')
+    #model = YOLO('best.pt')
     #cap1 = cv2.VideoCapture(receive_video(sock=sock1, stream_name= "Camera 1"))
     #cap2 = receive_video(sock=sock2, stream_name= "Camera 2")
     # Initialize video captures
@@ -235,7 +307,7 @@ async def handle_connection(websocket):
     #cap2 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4")
 
     try:
-        await process_and_stream_frames(websocket, model)
+        await process_and_stream_frames(websocket)
     except Exception as e:
         print(f"Error in handle_connection: {e}")
 
@@ -245,15 +317,29 @@ async def main():
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    try:
+    #try:
+        #asyncio.run(main())
+        print("tes")
+        while True:
+            thread3 = threading.Thread(target=apply_detections_and_bounding_box)
+            print("yes5")
+            thread1 = threading.Thread(target=receive_video, args=(sock1, "Camera 1"))
+            thread2 = threading.Thread(target=receive_video, args=(sock2, "Camera 2"))
+
+            thread3.start()
+            thread1.start()
+            thread2.start()
+
+            
         #receive_video(sock=sock1, stream_name= "Camera 1")
         #print("tes1")
-        asyncio.run(main())
+        #asyncio.run(main())
         
-    except KeyboardInterrupt:
-        print("\nShutting down server...")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-    finally:
-        cv2.destroyAllWindows()
-        sock1.close()
+   # except KeyboardInterrupt:
+   #     print("\nShutting down server...")
+   # except Exception as e:
+   #     print(f"Unexpected error: {e}")
+   # finally:
+   #     print("js")
+   #     cv2.destroyAllWindows()
+   #     sock1.close()

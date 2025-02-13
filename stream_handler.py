@@ -6,7 +6,7 @@ import cv2
 
 async def send_frame_via_websocket(websocket, frame, camera_name):
     """Send an encoded frame through WebSocket."""
-    _, buffer = cv2.imencode('.jpg', frame)
+    _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
     frame_base64 = base64.b64encode(buffer).decode('utf-8')
     message = json.dumps({
         "type": "frame",
