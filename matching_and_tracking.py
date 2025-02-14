@@ -60,12 +60,12 @@ def process_tracks_and_extract_features(deepsort, detections, frame):
     keypoints, descriptors = [], []
     
     # Extract SIFT features for tracked objects
-    for track in tracks:
-        kp, des = extract_sift_features(track, gray_frame)
-        if kp:
-            keypoints.extend(kp)
-            if des is not None:
-                descriptors.extend(des)
+    #for track in tracks:
+        #kp, des = extract_sift_features(track, gray_frame)
+        #if kp:
+        #    keypoints.extend(kp)
+        #    if des is not None:
+        #        descriptors.extend(des)
     
     return tracks, keypoints, descriptors
 
