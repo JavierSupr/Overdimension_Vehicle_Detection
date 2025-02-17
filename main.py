@@ -179,7 +179,7 @@ async def handle_connection(websocket):
     # Initialize YOLO model
     model = YOLO('yolov8n-seg.pt')
     cap1 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20250111_121008.mp4")
-    cap2 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4")
+    cap2 = cv2.VideoCapture("C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20250111_121008.mp4")
 
     try:
         await process_and_stream_frames(websocket, model, cap1, cap2)

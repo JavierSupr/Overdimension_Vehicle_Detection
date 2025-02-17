@@ -9,13 +9,15 @@ import time
 import struct
 import asyncio
 import websockets
-from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info
+from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info, compute_reference_height, estimate_height
 #from stream_handler import send_frame_via_websocket
 from id_merging import merge_track_ids
 from database import save_violation_to_mongodb, check_id_exists
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Tuple, Dict, List
 import base64
+from ultralytics import YOLO
+from dimension_estimation import calculate_distance, calculate_vehicle_height
 
 
 PORT_1 = 5010  # Port for first video stream
@@ -24,14 +26,16 @@ PORT_RESULT_1 = 5012
 PORT_RESULT_2 = 5013
 BUFFER_SIZE = 65536  # Max UDP packet size
 UDP_IP = "0.0.0.0"
-deepsort = DeepSort(max_age=3)
+deepsort = DeepSort(max_age=10)
 
 iou_threshold = 0.4
 processed_tracks = set()  
-estimated_height = 1.8
+#estimated_height = 1.8
 
 WEBSOCKET_URL = "ws://localhost:8765"
 WEBSOCKET_PORT = 8765
+
+id_mappings = {}
 
 async def websocket_sender(queue):
     """Sends frames from the queue to WebSocket clients asynchronously."""
@@ -111,39 +115,6 @@ def receive_video(sock, camera_name):
         print(f"[ERROR] Receiving video from {camera_name} failed: {e}")
         return None
 
-#def detect_objects(video_path, verbose=False):
-#    # Load YOLO model
-#    model = YOLO("yolov8n.pt")  # Use 'yolov8n.pt' for a small model
-#    
-#    # Open video capture
-#    cap = cv2.VideoCapture(video_path)
-#    detections = []
-#    
-#    while cap.isOpened():
-#        ret, frame = cap.read()
-#        if not ret:
-#            break
-#        
-#        # Run YOLO inference
-#        results = model(frame, verbose=False)[0]
-#        
-#        frame_detections = []
-#        for det in results.boxes.data:
-#            xmin, ymin, xmax, ymax, conf, cls = det.cpu().numpy()
-#            class_name = results.names[int(cls)]
-#            frame_detections.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name))
-#        
-#        detections.append(frame_detections)  # Append per-frame detections to the list
-#  
-#    cap.release()
-#    cv2.destroyAllWindows()
-#    
-#    if verbose:
-#        print(detections)
-#    
-#    return detections
-
-
 def apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame):
     """Receives detections via UDP and applies them to the matching video frame using frame_id."""
     detections = []
@@ -165,9 +136,9 @@ def apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
                 detections.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name))
 
                 color = (0, 255, 0) if class_name == "Truk" else (255, 0, 0)
-                cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
-                cv2.putText(frame, f"{class_name} ({conf:.2f})", (xmin, ymin - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                #cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
+                #cv2.putText(frame, f"{class_name} ({conf:.2f})", (xmin, ymin - 5),
+                #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
 
         return detections, frame  # Return modified frame with detections
@@ -183,102 +154,112 @@ def find_root(id_group, track_id):
             track_id = id_group[track_id]
         return track_id
 
-async def process_and_stream_frames(video_port, result_port, camera_name, queue):
+def process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data):
     """Handles video processing and adds frames to queue instead of blocking WebSocket."""
+  
+    #sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #sock_video.bind(("0.0.0.0", video_port))
+#
+    #sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #sock_result.bind(("0.0.0.0", result_port))
+    #estimated_heights = 2
+    model = YOLO("best.pt") 
+    cap = cv2.VideoCapture(video_path)
     
-    sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_video.bind(("0.0.0.0", video_port))
-
-    sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_result.bind(("0.0.0.0", result_port))
-
     while True:
-        try:
-            frame, frame_id = receive_video(sock_video, camera_name)
-            if frame is None or frame_id is None:
-                continue  # Skip if invalid frame
+        #try:
+            #frame, frame_id = receive_video(sock_video, camera_name)
+            #if frame is None or frame_id is None:
+            #    continue  # Skip if invalid frame
 
-            # Receive inference results
-            detections, processed_frame = apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
+            ## Receive inference results
+            #detections, processed_frame = apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
+                 # Use 'yolov8n.pt' for a small model
+
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.resize(frame, (640,480))
+            # Run YOLO inference
+            results = model(frame, verbose=False)[0]
+            #print("sini 3")
+            detections = []
+            tracked_objects1, keypoints1, descriptors1 = None, None, None  
+            tracked_objects2, keypoints2, descriptors2 = None, None, None  
+
+            for det in results.boxes.data:
+                xmin, ymin, xmax, ymax, conf, cls = det.cpu().numpy()
+                class_name = results.names[int(cls)]
+
+                # Check if masks exist
+                mask = results.masks.xy if results.masks is not None else None
+
+                detections.append((
+                    [xmin, ymin, xmax - xmin, ymax - ymin],  # Bounding box
+                    conf,  # Confidence score
+                    class_name,  # Class name
+                    mask  # Mask (None if not available)
+                ))
+
             if detections:
-                tracks, keypoints, descriptor = process_tracks_and_extract_features(deepsort, detections, processed_frame)
-                print('tes')
-                print(tracks)                
+                if camera_name == "Camera 1":
+                    tracked_objects1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
+                    reference_height = compute_reference_height(tracked_objects1, detections)
+                    estimated_height = estimate_height(tracked_objects1, reference_height)
+                    frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
+                                    # Store data in shared dictionary
+                    shared_data["tracked_objects1"] = tracked_objects1
+                    shared_data["keypoints1"] = keypoints1
+                    shared_data["descriptors1"] = descriptors1
 
-            # **Push to queue (WebSocket process will send it)**
+                    # Check if Camera 2 data is available
+                    if all(k in shared_data for k in ["tracked_objects2", "keypoints2", "descriptors2"]):
+                        good_matches = match_features(
+                            descriptors1, shared_data["descriptors2"],
+                            tracked_objects1, shared_data["tracked_objects2"],
+                            keypoints1, shared_data["keypoints2"]
+                        )
+                elif camera_name == "Camera 2":
+                    tracked_objects2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
+                    reference_height = compute_reference_height(tracked_objects2, detections)
+                    estimated_height = estimate_height(tracked_objects2, reference_height)
+                    frame = draw_tracking_info(frame, tracked_objects2, estimated_height)
+
+                    shared_data["tracked_objects2"] = tracked_objects2
+                    shared_data["keypoints2"] = keypoints2
+                    shared_data["descriptors2"] = descriptors2
+
+                
+                good_matches = match_features(descriptors1, descriptors2, tracked_objects1, tracked_objects2, keypoints1, keypoints2)
+
+
             if not queue.full():
-                queue.put((camera_name, processed_frame))
+                queue.put((camera_name, frame))
 
             # Display processed frame
-            cv2.imshow(camera_name, processed_frame)
+            cv2.imshow(camera_name, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-        except Exception as e:
-            print(f"[ERROR] {camera_name} processing failed: {e}")
-
-    sock_video.close()
-    sock_result.close()
-                    #if processed_frame is not None:
-                    #await send_frame_via_websocket(websocket, processed_frame, camera_name)
-
-
-                #ret, frame = cap.read()
-                #frame = cv2.resize(frame, (640, 480))
-                #result = model.predict(frame)[0]
-                  # Fill frame queue
-                #detections = apply_detections_and_bounding_box(frame,result)
-                #if detections and not frame_queues[camera_name].empty():
-                #    frame, _ = frame_queues[camera_name].get()  # Get the latest synchronized frame
-#
-                #    # Run tracking and get updated tracks
-                #    tracks, keypoints, descriptor = process_tracks_and_extract_features(deepsort, detections, frame)
-                #    if camera_name == "Camera 1":
-                #        frame_tracked = draw_tracking_info(frame.copy(), tracks, is_cam1=True)
-                #    elif camera_name == "Camera 2":
-                #        frame_tracked = draw_tracking_info(frame.copy(), tracks, is_cam1=False)
-                #    # Draw tracking IDs on frame
-                #    for track in tracks:
-                #        if not track.is_confirmed():
-                #            continue
-                #        
-                #        ltrb = track.to_ltrb()  # Get bounding box
-                #        track_id = track.track_id  # Get tracking ID
-                #        # Draw bounding box
-                #        cv2.rectangle(frame, (int(ltrb[0]), int(ltrb[1])), 
-                #                      (int(ltrb[2]), int(ltrb[3])), (0, 255, 0), 2)
-                #        # Display tracking ID
-                #        cv2.putText(frame, f"ID: {track_id}", (int(ltrb[0]), int(ltrb[1]) - 5),
-                #                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                #    # Calculate FPS
-                #    current_time = time.time()
-                #    fps = 1 / (current_time - prev_time)
-                #    prev_time = current_time
-                #    # Display FPS on frame
-                #    cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), 
-                #                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                #    #cv2.imshow(camera_name, frame)
-                #    #.waitKey(1)
-                #    print("masuk")
-#
-                #    print("masuk2")
-                #    #await send_frame_via_websocket(websocket, frame, camera_name)
-                #    #await asyncio.sleep(0.05)
 def start_websocket_process(queue):
     """Start the WebSocket process and pass the queue."""
     asyncio.run(websocket_sender(queue))
 
-def start_process(video_port, result_port, camera_name, queue):
+def start_process(video_port, result_port, camera_name, queue, video_path, shared_data):
     """Wrapper to run async function inside a multiprocessing process."""
-    asyncio.run(process_and_stream_frames(video_port, result_port, camera_name, queue))
+    asyncio.run(process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data))
 
 if __name__ == "__main__":
+    video_path = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/333 VID_20231011_170120.mp4"
+
     try:
+        manager = multiprocessing.Manager()
+        shared_data = manager.dict()  # Shared dictionary for inter-process communication
         frame_queue = multiprocessing.Queue(maxsize=10)  # Shared queue
 
         process_websocket = multiprocessing.Process(target=start_websocket_process, args=(frame_queue,))
-        process1 = multiprocessing.Process(target=start_process, args=(PORT_1, PORT_RESULT_1, "Camera 1", frame_queue))
-        process2 = multiprocessing.Process(target=start_process, args=(PORT_2, PORT_RESULT_2, "Camera 2", frame_queue))
+        process1 = multiprocessing.Process(target=start_process, args=(PORT_1, PORT_RESULT_1, "Camera 1", frame_queue, video_path, shared_data))
+        process2 = multiprocessing.Process(target=start_process, args=(PORT_2, PORT_RESULT_2, "Camera 2", frame_queue, video_path, shared_data))
 
         process_websocket.start()
         process1.start()
