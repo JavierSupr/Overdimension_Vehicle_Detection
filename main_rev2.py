@@ -9,15 +9,14 @@ import time
 import struct
 import asyncio
 import websockets
-from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info, compute_reference_height, estimate_height
-#from stream_handler import send_frame_via_websocket
+from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info
 from id_merging import merge_track_ids
 from database import save_violation_to_mongodb, check_id_exists
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Tuple, Dict, List
 import base64
 from ultralytics import YOLO
-from dimension_estimation import calculate_distance, calculate_vehicle_height
+from dimension_estimation import  compute_reference_height, estimate_height
 
 
 PORT_1 = 5010  # Port for first video stream
@@ -28,14 +27,8 @@ BUFFER_SIZE = 65536  # Max UDP packet size
 UDP_IP = "0.0.0.0"
 deepsort = DeepSort(max_age=10)
 
-iou_threshold = 0.4
-processed_tracks = set()  
-#estimated_height = 1.8
-
 WEBSOCKET_URL = "ws://localhost:8765"
 WEBSOCKET_PORT = 8765
-
-id_mappings = {}
 
 async def websocket_sender(queue):
     """Sends frames from the queue to WebSocket clients asynchronously."""
@@ -168,9 +161,7 @@ def list_to_keypoints(kp_list):
     keypoints = []
     for kp in kp_list:
         if len(kp) == 7:  # Ensure tuple has 7 elements
-            print("masuk1")
             x, y, size, angle, response, octave, class_id = kp  # Unpack tuple
-            print("masuk2")
             cv2.KeyPoint()
             # Ensure correct data types
             keypoints.append(cv2.KeyPoint(
@@ -179,7 +170,7 @@ def list_to_keypoints(kp_list):
                 octave=int(octave), class_id=int(class_id)
             ))
         else:
-            print(f"⚠️ Warning: Invalid keypoint format {kp} (Expected 7 elements)")
+            print(f"Invalid keypoint format {kp} (Expected 7 elements)")
     return keypoints
 
 CLASS_COLORS = {
@@ -255,13 +246,8 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             if not ret:
                 break
             frame = cv2.resize(frame, (640,480))
-            # Run YOLO inference
             results = model(frame, verbose=False)[0]
-            #print("sini 3")
             detections = []
-            #tracked_objects1, keypoints1, descriptors1 = None, None, None  
-            #tracked_objects2, keypoints2, descriptors2 = None, None, None  
-
             for result in results:
                 boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
                 masks = result.masks.data.cpu().numpy() if result.masks else None  # Segmentation masks
@@ -285,64 +271,38 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             if detections:
                 if camera_name == "Camera 1":
                     tracked_objects1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    #print(f"descriptor1 in main {descriptors1}")
+                    tracked_objects1 = merge_track_ids(tracked_objects1, detections)
                     reference_height = compute_reference_height(tracked_objects1, detections, tampak_depan_data)
                     estimated_height = estimate_height(tracked_objects1, reference_height)
                     frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
-                    #(f"keypoints1 {keypoints1}")
-                    #print()
-                    #print(f"descriptor1 {descriptors1}")
 
-                    #print(f"keypoints1 {keypoints1}")
                     # Store data in shared dictionary
                     shared_data["tracked_objects1"] = tracked_objects1
                     shared_data["keypoints1"] = keypoints_to_list(keypoints1)
-                    #(f"shared_data['keypoints1']: {shared_data['keypoints1']}")
-
                     shared_data["descriptors1"] = descriptors1
 
                     if camera_name == "Camera 1":
                         if all(k in shared_data for k in ["tracked_objects1", "keypoints1", "descriptors1", 
                                                           "tracked_objects2", "keypoints2", "descriptors2"]):
-                            print("yes")
                             if shared_data["descriptors1"] is not None and shared_data["descriptors2"] is not None:
-                                print("yes2")
-                                #print("✅ Retrieved Keypoints1:", shared_data["keypoints1"])  # Debugging
-                                #print()
-                                #print("✅ Retrieved Keypoints2:", shared_data["keypoints2"])  # Debugging
-                                #print()
-                                #print("✅ Retrieved Descriptor1:", shared_data["descriptors1"])  # Debugging
-                                ##print()
-                                #print("✅ Retrieved Descriptor2:", shared_data["descriptors2"])  # Debugging
-                    
-                                #keypoints1 = list_to_keypoints(shared_data["keypoints1"])  # ✅ Convert back
-                                keypoints2 = list_to_keypoints(shared_data["keypoints2"])  # ✅ Convert back
-                                
-                                #good_matches = match_features(
-                                #    shared_data["descriptors1"], shared_data["descriptors2"],
-                                #    shared_data["tracked_objects1"], shared_data["tracked_objects2"],
-                                #    keypoints1, keypoints2
-                                #)
-                           # print(f"good_matches{good_matches}")
+                                keypoints2 = list_to_keypoints(shared_data["keypoints2"])                                 
+                                good_matches, id_mapping = match_features(
+                                    shared_data["descriptors1"], shared_data["descriptors2"],
+                                    shared_data["tracked_objects1"], shared_data["tracked_objects2"],
+                                    keypoints1, keypoints2
+                                )
+                                frame = draw_tracking_info(frame, tracked_objects1, estimated_height, id_mapping)
+
                 elif camera_name == "Camera 2":
                     tracked_objects2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
+                    tracked_objects2 = merge_track_ids(tracked_objects2, detections)
                     reference_height = compute_reference_height(tracked_objects2, detections, tampak_depan_data)
                     estimated_height = estimate_height(tracked_objects2, reference_height)
                     frame = draw_tracking_info(frame, tracked_objects2, estimated_height)
-                    #print(f"keypoints2 {keypoints2}")
-                    #print()
-                    #print(f"descriptor2 {descriptors2}")
 
                     shared_data["tracked_objects2"] = tracked_objects2
                     shared_data["keypoints2"] = keypoints_to_list(keypoints2)
                     shared_data["descriptors2"] = descriptors2
-                    #tracks1 = [track[0] for track in updated_tracks1]  # Extracting track
-                    #tracks2 = [track[0] for track in tracked_objects2]
-                    #print(f"tracks2 {tracks2}, descriptor2 {descriptors2}, keypoint2 {keypoints2}")
-
-                
-                #good_matches = match_features(descriptors1, descriptors2, tracked_objects1, tracked_objects2, keypoints1, keypoints2)
-
 
             if not queue.full():
                 queue.put((camera_name, frame))

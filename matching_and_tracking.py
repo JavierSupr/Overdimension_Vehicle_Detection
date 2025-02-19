@@ -37,46 +37,73 @@ def extract_sift_features(track, gray_frame):
 
     return kp, des
 
-    #return descriptor, keypoints
-def update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches):
-    track1_matches = {}
-    track2_matches = {}
+def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping):
+    """
+    Updates ID mappings by assigning Camera 1 object IDs to the corresponding Camera 2 object IDs.
     
-    for track1 in tracks1:
-        if track1.is_confirmed():
-            track1_matches[track1.track_id] = get_track_feature_points(track1, keypoints1, good_matches, True)
+    Args:
+        tracks1 (list): Bounding boxes and IDs from Camera 1.
+        tracks2 (list): Bounding boxes and IDs from Camera 2.
+        keypoints1 (list): Keypoints from Camera 1.
+        keypoints2 (list): Keypoints from Camera 2.
+        good_matches (list): List of good matches between keypoints from both cameras.
     
-    for track2 in tracks2:
-        if track2.is_confirmed():
-            track2_matches[track2.track_id] = get_track_feature_points(track2, keypoints2, good_matches, False)
-    
-    for track2_id, matches2 in track2_matches.items():
-        if not matches2:
-            continue
-        
-        best_track1_id = None
-        max_matches = 0
-        
-        for track1_id, matches1 in track1_matches.items():
-            common_matches = len(set(matches2) & set(matches1))
-            if common_matches > max_matches:
-                max_matches = common_matches
-                best_track1_id = track1_id
-        
-        if max_matches >= 2:  # Threshold for minimum matches
-            id_mappings[track2_id] = best_track1_id
-
-def get_track_feature_points(track, keypoints, good_matches, is_cam1):
-    ltrb = track.to_ltrb()
-    x1, y1, x2, y2 = map(int, ltrb)
-    track_points = []
+    Returns:
+        dict: Updated ID mappings {old_id: new_id}.
+    """
+    # Create a mapping from Camera 2 IDs to Camera 1 IDs
     
     for match in good_matches:
-        pt = keypoints[match.queryIdx].pt if is_cam1 else keypoints[match.trainIdx].pt
-        if x1 <= pt[0] <= x2 and y1 <= pt[1] <= y2:
-            track_points.append(match)
+        kp1_idx = match.queryIdx  # Index of keypoint in Camera 1
+        kp2_idx = match.trainIdx  # Index of keypoint in Camera 2
+        
+        # Find the track ID associated with the matched keypoints
+        id1, id2 = None, None
+        
+        for track_obj in updated_tracks2:
+            track2, class_name2, track_id2, mask2 = track_obj
+            if is_point_in_bbox(keypoints2[kp2_idx].pt, track2.to_tlbr()):  # Use track.to_tlbr() for bounding box
+                id2 = track_id2  # Get the track ID
+                break
+        
+        for track_obj in updated_tracks1:
+            track1, class_name1, track_id1, mask1 = track_obj
+            if is_point_in_bbox(keypoints1[kp1_idx].pt, track1.to_tlbr()):  # Use track.to_tlbr()
+                id1 = track_id1  # Get the track ID
+                break
+        
+        if id1 is not None and id2 is not None:
+            # Assign Camera 2 ID to Camera 1 ID
+            if id2 not in id_mapping:
+                id_mapping[id2] = id1
+        
+    # Update tracks in Camera 1 with IDs from Camera 2
+    for i, (track1, class_name1, track_id1, mask1) in enumerate(updated_tracks1):
+        if track_id1 in id_mapping.values():
+            for id2, id1 in id_mapping.items():
+                if track_id1 == id1:
+                    updated_tracks1[i] = (track1, class_name1, id2, mask1)  # Update ID
+                    print("ID On Camera 1 Updated")
+                    break
+    return id_mapping
+
+
+def is_point_in_bbox(point, bbox):
+    """
+    Checks if a point is inside a bounding box.
     
-    return track_points
+    Args:
+        point (tuple): (x, y) coordinates of the point.
+        bbox (list): Bounding box in format [x_min, y_min, width, height].
+    
+    Returns:
+        bool: True if the point is inside the bounding box, otherwise False.
+    """
+    x, y = point
+    x_min, y_min, width, height = bbox
+    x_max, y_max = x_min + width, y_min + height
+    return x_min <= x <= x_max and y_min <= y <= y_max
+
 
 def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2, keypoints1, keypoints2):
     """
@@ -93,15 +120,10 @@ def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2,
     Returns:
         list: List of good matches between frames
     """
-    good_matches = []
-    tracks1 = [track[0] for track in updated_tracks1]  # Extracting track
-    tracks2 = [track[0] for track in updated_tracks2]
-    #print(f"descriptor 1 {descriptors1}")
-    #print(f"descriptor 2 {descriptors2}")
-    # Extract only the tracks from updated_tracks
+    id_mapping = {}  # {id2: id1}
 
-    #print(f"keypoint1 {keypoints1}, keypoint2 {keypoints2}")
-    
+    good_matches = []
+
     if descriptors1 is not None and descriptors2 is not None:
         try:
             descriptors1 = np.array(descriptors1)
@@ -115,63 +137,12 @@ def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2,
                     if m.distance < 0.75 * n.distance:
                         good_matches.append(m)
             
-            update_id_mappings(tracks1, tracks2, keypoints1, keypoints2, good_matches)
+            id_mapping = update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping)
             
         except Exception as e:
             print(f"Error in feature matching: {e}")
     
-    return good_matches
-
-
-
-def iou(box1, box2):
-    """Menghitung Intersection over Union (IoU) antara dua bounding box dengan format (x, y, w, h)."""
-    x1, y1, w1, h1 = box1  # Detection Box (x, y, w, h)
-    x2, y2, w2, h2 = box2  # Track Box (x, y, w, h)
-    
-    # Hitung koordinat interseksi
-    xi1 = max(x1, x2)
-    yi1 = max(y1, y2)
-    xi2 = min(x1 + w1, x2 + w2)
-    yi2 = min(y1 + h1, y2 + h2)
-    
-    # Hitung luas interseksi
-    inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
-    box1_area = w1 * h1
-    box2_area = w2 * h2    
-    
-    # Hitung IoU
-    iou_score = inter_area / box1_area
-    return iou_score
-
-
-def merge_track_ids(tracks, detections):
-    """Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with 'Truk'."""
-    truck_tracks = []
-    for track, detection in zip(tracks, detections):
-        bbox, conf, class_name, mask = detection
-        if class_name == "Truk":
-            truck_tracks.append((track, bbox))
-    
-    updated_tracks = []
-    for track, detection in zip(tracks, detections):
-        bbox, conf, class_name, mask = detection
-        track_id = track.track_id
-        
-        if class_name in ["Tampak Depan", "Tampak Samping"]:
-            for truck_track, truck_bbox in truck_tracks:
-                iou_score = iou(bbox, truck_bbox) 
-                if iou_score > 0.3:  # Overlapping with a truck
-                    #print(f"bbox {bbox} truck {truck_bbox} iou score {iou_score}")
-
-                    track_id = truck_track.track_id
-                    break
-        
-        updated_tracks.append((track, class_name, track_id, mask))
-        
-    
-    return updated_tracks
-
+    return good_matches, id_mapping
 
 def process_tracks_and_extract_features(deepsort, detections, frame):
     """
@@ -190,17 +161,13 @@ def process_tracks_and_extract_features(deepsort, detections, frame):
     """
     # Update tracks with detections
     tracks = deepsort.update_tracks(detections, frame=frame)
-    
-    # Merge track IDs based on IoU
-    tracked_objects = merge_track_ids(tracks, detections)
-    #print(f"tracked_objects {tracked_objects}")
-    
+
     # Convert frame to grayscale for SIFT
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
     keypoints, descriptors = [], []
     
-    for track, class_name, track_id, mask in tracked_objects:
+    for track in tracks:
         # Extract SIFT features for each tracked object
         kp, des = extract_sift_features(track, gray_frame)
         if kp:
@@ -208,7 +175,7 @@ def process_tracks_and_extract_features(deepsort, detections, frame):
             if des is not None:
                 descriptors.extend(des)
     
-    return tracked_objects, keypoints, descriptors
+    return tracks, keypoints, descriptors
 
 
 def draw_tracking_info(frame, tracks, estimated_heights, id_mappings=None, is_cam1=True):
@@ -244,77 +211,4 @@ def draw_tracking_info(frame, tracks, estimated_heights, id_mappings=None, is_ca
     
     return frame
 
-
-
-REFERENCE_HEIGHT_METERS = 2.2  # Fixed reference height for 'Tampak Depan'
-
-def compute_reference_height(updated_tracks, detections, tampak_depan_data):
-
-    for (track, class_name, track_id, mask), detection in zip(updated_tracks, detections):
-        bbox, conf, class_name_detection, mask_detection = detection
-        if class_name_detection == "Tampak Depan":
-            height_from_mask = compute_height_from_mask(mask_detection)
-            if height_from_mask:
-                tampak_depan_data[track_id] = height_from_mask
-
-    return tampak_depan_data  # Tambahkan return jika ingin mengembalikan data
-
-def compute_height_from_mask(mask):
-    """
-    Compute the height of an object from a binary mask by finding the maximum vertical extent.
-    
-    Args:
-        mask: A 2D numpy array (binary mask) where nonzero values indicate the object.
-    
-    Returns:
-        height: The computed height in pixels.
-    """
-    if mask is None or mask.size == 0:
-        return None  # No valid mask
-
-    # Get the row indices (y-coordinates) where the mask has nonzero values
-    y_coords = np.where(mask > 0)[0]  # Extract only Y-axis values
-    
-    if len(y_coords) == 0:
-        return None  # No object detected in mask
-
-    # Compute height as the difference between max and min y-coordinates
-    height = max(y_coords) - min(y_coords)
-    return height
-
-
-
-def estimate_height(tracked_objects, tampak_depan_data):
-    """
-    Estimates the height of 'Tampak Samping' based on the height of 'Tampak Depan' (fixed at 2.2m).
-    
-    Args:
-        tracked_objects: List of tuples containing (track, class_name, track_id, mask, bbox).
-        tampak_depan_data: Dictionary containing mask-based heights of 'Tampak Depan' by track_id.
-    
-    Returns:
-        estimated_heights: Dictionary with track_id as key and estimated height in meters as value.
-    """
-    estimated_heights = {}
-    #print(f"tampak_depan_data[track_id] {tampak_depan_data}")
-    #print("0")
-    for track, class_name, track_id, mask in tracked_objects:
-        if class_name == "Tampak Samping":
-            current_mask_height = compute_height_from_mask(mask)
-            #print(f"current_mask_height tampak samping {current_mask_height} track id {track_id}")
-
-            print(f"track_id {track_id}")
-            if track_id in tampak_depan_data:
-            # print(f"track id {track_id}, tipe data: {type(track_id)}")
-                known_mask_height = tampak_depan_data[track_id]  # Height from mask
-                current_mask_height = compute_height_from_mask(mask)
-                #print("2")
-                if current_mask_height and known_mask_height:
-                   # print("3")
-                    ## Scale using the reference height (2.2m for 'Tampak Depan')
-                    estimated_height = (current_mask_height / known_mask_height) * REFERENCE_HEIGHT_METERS
-                    estimated_heights[track_id] = estimated_height
-                    print(f"Estimated height for Tampak Samping (Track ID {track_id}): {current_mask_height}/{known_mask_height} : {estimated_height:.2f} meters")
-
-    return estimated_heights
 
