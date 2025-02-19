@@ -154,6 +154,80 @@ def find_root(id_group, track_id):
             track_id = id_group[track_id]
         return track_id
 
+def keypoints_to_list(keypoints):
+    """Convert cv2.KeyPoint objects to a list of tuples for serialization.
+    
+    If keypoints is an empty list, return an empty list.
+    """
+    return [(float(kp.pt[0]), float(kp.pt[1]), float(kp.size), float(kp.angle), 
+             float(kp.response), int(kp.octave), int(kp.class_id)) for kp in keypoints] if keypoints else []
+
+
+def list_to_keypoints(kp_list):
+    """Convert a list of tuples back into cv2.KeyPoint objects."""
+    keypoints = []
+    for kp in kp_list:
+        if len(kp) == 7:  # Ensure tuple has 7 elements
+            print("masuk1")
+            x, y, size, angle, response, octave, class_id = kp  # Unpack tuple
+            print("masuk2")
+            cv2.KeyPoint()
+            # Ensure correct data types
+            keypoints.append(cv2.KeyPoint(
+                x=float(x), y=float(y), size=float(size), 
+                angle=float(angle), response=float(response), 
+                octave=int(octave), class_id=int(class_id)
+            ))
+        else:
+            print(f"⚠️ Warning: Invalid keypoint format {kp} (Expected 7 elements)")
+    return keypoints
+
+CLASS_COLORS = {
+    "Truk": (0, 0, 255),         # Red
+    "Tampak Depan": (255, 0, 0), # Blue
+    "Tampak Samping": (0, 255, 0) # Green
+}
+
+def display_video_with_masks(frame, updated_tracks):
+        """
+        Display the video with overlayed segmentation masks from the updated_tracks list.
+
+        Args:
+            video_path (str): Path to the input video.
+            updated_tracks (list): List of tuples (track, class_name, track_id, mask).
+        """
+
+        for track, class_name, track_id, mask in updated_tracks:
+            color = CLASS_COLORS.get(class_name, (255, 255, 255))  # Default white if class not found
+            
+            if mask is not None:
+                mask_image = np.zeros_like(frame[:, :, 0], dtype=np.uint8)  # Create blank mask
+
+                # Ensure mask is in the correct format for OpenCV
+                if isinstance(mask, list) and isinstance(mask[0], (list, np.ndarray)):  
+                    # If mask is a list of multiple polygon segments
+                    for segment in mask:
+                        segment_np = np.array(segment, dtype=np.int32)
+                        if len(segment_np.shape) == 2 and segment_np.shape[1] == 2:  # Ensure valid shape
+                            cv2.fillPoly(mask_image, [segment_np], 255)
+                elif isinstance(mask, np.ndarray) and len(mask.shape) == 2:
+                    # If mask is already a binary image
+                    mask_image = mask.astype(np.uint8) * 255
+
+                # Overlay mask with transparency using the class color
+                mask_colored = np.zeros_like(frame, dtype=np.uint8)
+                mask_colored[mask_image > 0] = color  # Apply the class-specific color
+                frame = cv2.addWeighted(mask_colored, 0.5, frame, 0.5, 0)
+
+            # Draw track information
+            bbox = track.to_tlbr()  # Get bounding box [xmin, ymin, xmax, ymax]
+            x1, y1, x2, y2 = map(int, bbox)
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)  # Bounding box in class color
+            cv2.putText(frame, f"{class_name} ID:{track_id}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)       #if cv2.waitKey(30) & 0xFF == ord('q'):  # Press 'q' to exit
+        
+        return frame
 def process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data):
     """Handles video processing and adds frames to queue instead of blocking WebSocket."""
   
@@ -175,6 +249,7 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             ## Receive inference results
             #detections, processed_frame = apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
                  # Use 'yolov8n.pt' for a small model
+            tampak_depan_data = {}
 
             ret, frame = cap.read()
             if not ret:
@@ -184,53 +259,89 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             results = model(frame, verbose=False)[0]
             #print("sini 3")
             detections = []
-            tracked_objects1, keypoints1, descriptors1 = None, None, None  
-            tracked_objects2, keypoints2, descriptors2 = None, None, None  
+            #tracked_objects1, keypoints1, descriptors1 = None, None, None  
+            #tracked_objects2, keypoints2, descriptors2 = None, None, None  
 
-            for det in results.boxes.data:
-                xmin, ymin, xmax, ymax, conf, cls = det.cpu().numpy()
-                class_name = results.names[int(cls)]
+            for result in results:
+                boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
+                masks = result.masks.data.cpu().numpy() if result.masks else None  # Segmentation masks
+                confidences = result.boxes.conf.cpu().numpy()  # Confidence scores
+                class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Class IDs
+                class_names = [model.names[i] for i in class_ids]  # Class names
 
-                # Check if masks exist
-                mask = results.masks.xy if results.masks is not None else None
+                for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
+                    xmin, ymin, xmax, ymax = box
+                    width, height = xmax - xmin, ymax - ymin
+                    mask = masks[i] if masks is not None else None  # Assign mask if available
 
-                detections.append((
-                    [xmin, ymin, xmax - xmin, ymax - ymin],  # Bounding box
-                    conf,  # Confidence score
-                    class_name,  # Class name
-                    mask  # Mask (None if not available)
-                ))
+                    detections.append((
+                        [xmin, ymin, width, height],  # Bounding box
+                        conf,  # Confidence score
+                        class_name,  # Class name
+                        mask  # Mask (None if not available)
+                    ))
+
 
             if detections:
                 if camera_name == "Camera 1":
                     tracked_objects1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    reference_height = compute_reference_height(tracked_objects1, detections)
+                    #print(f"descriptor1 in main {descriptors1}")
+                    reference_height = compute_reference_height(tracked_objects1, detections, tampak_depan_data)
                     estimated_height = estimate_height(tracked_objects1, reference_height)
                     frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
-                                    # Store data in shared dictionary
+                    #(f"keypoints1 {keypoints1}")
+                    #print()
+                    #print(f"descriptor1 {descriptors1}")
+
+                    #print(f"keypoints1 {keypoints1}")
+                    # Store data in shared dictionary
                     shared_data["tracked_objects1"] = tracked_objects1
-                    shared_data["keypoints1"] = keypoints1
+                    shared_data["keypoints1"] = keypoints_to_list(keypoints1)
+                    #(f"shared_data['keypoints1']: {shared_data['keypoints1']}")
+
                     shared_data["descriptors1"] = descriptors1
 
-                    # Check if Camera 2 data is available
-                    if all(k in shared_data for k in ["tracked_objects2", "keypoints2", "descriptors2"]):
-                        good_matches = match_features(
-                            descriptors1, shared_data["descriptors2"],
-                            tracked_objects1, shared_data["tracked_objects2"],
-                            keypoints1, shared_data["keypoints2"]
-                        )
+                    if camera_name == "Camera 1":
+                        if all(k in shared_data for k in ["tracked_objects1", "keypoints1", "descriptors1", 
+                                                          "tracked_objects2", "keypoints2", "descriptors2"]):
+                            print("yes")
+                            if shared_data["descriptors1"] is not None and shared_data["descriptors2"] is not None:
+                                print("yes2")
+                                #print("✅ Retrieved Keypoints1:", shared_data["keypoints1"])  # Debugging
+                                #print()
+                                #print("✅ Retrieved Keypoints2:", shared_data["keypoints2"])  # Debugging
+                                #print()
+                                #print("✅ Retrieved Descriptor1:", shared_data["descriptors1"])  # Debugging
+                                ##print()
+                                #print("✅ Retrieved Descriptor2:", shared_data["descriptors2"])  # Debugging
+                    
+                                #keypoints1 = list_to_keypoints(shared_data["keypoints1"])  # ✅ Convert back
+                                keypoints2 = list_to_keypoints(shared_data["keypoints2"])  # ✅ Convert back
+                                
+                                #good_matches = match_features(
+                                #    shared_data["descriptors1"], shared_data["descriptors2"],
+                                #    shared_data["tracked_objects1"], shared_data["tracked_objects2"],
+                                #    keypoints1, keypoints2
+                                #)
+                           # print(f"good_matches{good_matches}")
                 elif camera_name == "Camera 2":
                     tracked_objects2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    reference_height = compute_reference_height(tracked_objects2, detections)
+                    reference_height = compute_reference_height(tracked_objects2, detections, tampak_depan_data)
                     estimated_height = estimate_height(tracked_objects2, reference_height)
                     frame = draw_tracking_info(frame, tracked_objects2, estimated_height)
+                    #print(f"keypoints2 {keypoints2}")
+                    #print()
+                    #print(f"descriptor2 {descriptors2}")
 
                     shared_data["tracked_objects2"] = tracked_objects2
-                    shared_data["keypoints2"] = keypoints2
+                    shared_data["keypoints2"] = keypoints_to_list(keypoints2)
                     shared_data["descriptors2"] = descriptors2
+                    #tracks1 = [track[0] for track in updated_tracks1]  # Extracting track
+                    #tracks2 = [track[0] for track in tracked_objects2]
+                    #print(f"tracks2 {tracks2}, descriptor2 {descriptors2}, keypoint2 {keypoints2}")
 
                 
-                good_matches = match_features(descriptors1, descriptors2, tracked_objects1, tracked_objects2, keypoints1, keypoints2)
+                #good_matches = match_features(descriptors1, descriptors2, tracked_objects1, tracked_objects2, keypoints1, keypoints2)
 
 
             if not queue.full():
@@ -240,7 +351,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             cv2.imshow(camera_name, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-
 def start_websocket_process(queue):
     """Start the WebSocket process and pass the queue."""
     asyncio.run(websocket_sender(queue))
