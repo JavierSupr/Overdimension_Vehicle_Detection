@@ -108,7 +108,7 @@ def receive_video(sock, camera_name):
         print(f"[ERROR] Receiving video from {camera_name} failed: {e}")
         return None
 
-def apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame):
+def extract_detections(sock_result, frame_id):
     """Receives detections via UDP and applies them to the matching video frame using frame_id."""
     detections = []
     sock_result.settimeout(0.05)  # Prevent blocking
@@ -125,27 +125,14 @@ def apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
                 class_name = obj["label"]
                 conf = float(obj["conf"])
                 bbox = obj["bbox"]
+                mask = obj["seg"]
                 xmin, ymin, xmax, ymax = map(int, bbox)
-                detections.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name))
+                detections.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name, mask))
 
-                color = (0, 255, 0) if class_name == "Truk" else (255, 0, 0)
-                #cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
-                #cv2.putText(frame, f"{class_name} ({conf:.2f})", (xmin, ymin - 5),
-                #            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-
-        return detections, frame  # Return modified frame with detections
+        return detections  # Return modified frame with detections
 
     except socket.timeout:
-        return [], frame  # Return frame as is if no detections received
-
-def find_root(id_group, track_id):
-        """Find the root ID for a given track ID."""
-        if track_id not in id_group:
-            return track_id
-        while id_group[track_id] != track_id:
-            track_id = id_group[track_id]
-        return track_id
+        return []  # Return frame as is if no detections received
 
 def keypoints_to_list(keypoints):
     """Convert cv2.KeyPoint objects to a list of tuples for serialization.
@@ -222,59 +209,56 @@ def display_video_with_masks(frame, updated_tracks):
 def process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data):
     """Handles video processing and adds frames to queue instead of blocking WebSocket."""
   
-    #sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    #sock_video.bind(("0.0.0.0", video_port))
-#
-    #sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    #sock_result.bind(("0.0.0.0", result_port))
+    sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_video.bind(("0.0.0.0", video_port))
+    sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock_result.bind(("0.0.0.0", result_port))
     #estimated_heights = 2
-    model = YOLO("best.pt") 
-    cap = cv2.VideoCapture(video_path)
+    #model = YOLO("best.pt") 
+    #cap = cv2.VideoCapture(video_path)
     
     while True:
-        #try:
-            #frame, frame_id = receive_video(sock_video, camera_name)
-            #if frame is None or frame_id is None:
-            #    continue  # Skip if invalid frame
-
-            ## Receive inference results
-            #detections, processed_frame = apply_detections_and_bounding_box(sock_result, camera_name, frame_id, frame)
-                 # Use 'yolov8n.pt' for a small model
+            frame, frame_id = receive_video(sock_video, camera_name)
+            if frame is None or frame_id is None:
+                continue  # Skip if invalid frame
+            # Receive inference results
+            detections = extract_detections(sock_result, frame_id)
+                # Use 'yolov8n.pt' for a small model
             tampak_depan_data = {}
 
-            ret, frame = cap.read()
-            if not ret:
-                break
-            frame = cv2.resize(frame, (640,480))
-            results = model(frame, verbose=False)[0]
-            detections = []
-            for result in results:
-                boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
-                masks = result.masks.data.cpu().numpy() if result.masks else None  # Segmentation masks
-                confidences = result.boxes.conf.cpu().numpy()  # Confidence scores
-                class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Class IDs
-                class_names = [model.names[i] for i in class_ids]  # Class names
-
-                for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
-                    xmin, ymin, xmax, ymax = box
-                    width, height = xmax - xmin, ymax - ymin
-                    mask = masks[i] if masks is not None else None  # Assign mask if available
-
-                    detections.append((
-                        [xmin, ymin, width, height],  # Bounding box
-                        conf,  # Confidence score
-                        class_name,  # Class name
-                        mask  # Mask (None if not available)
-                    ))
+            #ret, frame = cap.read()
+            #if not ret:
+            #    break
+            #frame = cv2.resize(frame, (640,480))
+            #results = model(frame, verbose=False)[0]
+            #detections = []
+            #for result in results:
+            #    boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
+            #    masks = result.masks.data.cpu().numpy() if result.masks else None  # Segmentation masks
+            #    confidences = result.boxes.conf.cpu().numpy()  # Confidence scores
+            #    class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Class IDs
+            #    class_names = [model.names[i] for i in class_ids]  # Class names
+#
+            #    for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
+            #        xmin, ymin, xmax, ymax = box
+            #        width, height = xmax - xmin, ymax - ymin
+            #        mask = masks[i] if masks is not None else None  # Assign mask if available
+            #        print(f"mask {mask}")
+            #        detections.append((
+            #            [xmin, ymin, width, height],  # Bounding box
+            #            conf,  # Confidence score
+            #            class_name,  # Class name
+            #            mask  # Mask (None if not available)
+            #        ))
 
 
             if detections:
                 if camera_name == "Camera 1":
-                    tracked_objects1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    tracked_objects1 = merge_track_ids(tracked_objects1, detections)
+                    tracks, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
+                    tracked_objects1 = merge_track_ids(tracks, detections)
                     reference_height = compute_reference_height(tracked_objects1, detections, tampak_depan_data)
                     estimated_height = estimate_height(tracked_objects1, reference_height)
-                    frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
+                    draw_frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
 
                     # Store data in shared dictionary
                     shared_data["tracked_objects1"] = tracked_objects1
@@ -291,7 +275,12 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                     shared_data["tracked_objects1"], shared_data["tracked_objects2"],
                                     keypoints1, keypoints2
                                 )
-                                frame = draw_tracking_info(frame, tracked_objects1, estimated_height, id_mapping)
+                                #print(f"id mapping {id_mapping}")
+                                #for track_id in id_mapping.values():  # or id_mapping.keys() depending on your structure
+                                    #if not check_id_exists(track_id):
+                                    #print(f"tracked object {tracked_objects1}")
+                                    #save_violation_to_mongodb(track_id, frame, tracked_objects1)
+                                frame = draw_tracking_info(draw_frame, tracked_objects1, estimated_height, id_mapping)
 
                 elif camera_name == "Camera 2":
                     tracked_objects2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)

@@ -29,7 +29,7 @@ def merge_track_ids(tracks, detections):
             truck_tracks.append((track, bbox))
     
     updated_tracks = []
-    for track, detection in zip(tracks, detections):
+    for i, (track, detection) in enumerate(zip(tracks, detections)):
         bbox, conf, class_name, mask = detection
         track_id = track.track_id
         
@@ -41,7 +41,7 @@ def merge_track_ids(tracks, detections):
 
                     track_id = truck_track.track_id
                     break
-        
+
         updated_tracks.append((track, class_name, track_id, mask))
         
     

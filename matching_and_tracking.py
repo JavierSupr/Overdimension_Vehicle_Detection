@@ -1,10 +1,7 @@
 import cv2
-from deep_sort_realtime.deepsort_tracker import DeepSort
 import numpy as np
 
-deepsort = DeepSort(max_age=10)
 sift = cv2.SIFT_create()
-bf = cv2.BFMatcher()
 id_mappings = {}
 
 
@@ -64,12 +61,15 @@ def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2,
             track2, class_name2, track_id2, mask2 = track_obj
             if is_point_in_bbox(keypoints2[kp2_idx].pt, track2.to_tlbr()):  # Use track.to_tlbr() for bounding box
                 id2 = track_id2  # Get the track ID
+                #print(f"classname2 {class_name2}")
                 break
         
         for track_obj in updated_tracks1:
             track1, class_name1, track_id1, mask1 = track_obj
             if is_point_in_bbox(keypoints1[kp1_idx].pt, track1.to_tlbr()):  # Use track.to_tlbr()
                 id1 = track_id1  # Get the track ID
+                #print(f"classname1 {class_name1}")
+
                 break
         
         if id1 is not None and id2 is not None:
@@ -77,14 +77,16 @@ def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2,
             if id2 not in id_mapping:
                 id_mapping[id2] = id1
         
+        
     # Update tracks in Camera 1 with IDs from Camera 2
     for i, (track1, class_name1, track_id1, mask1) in enumerate(updated_tracks1):
-        if track_id1 in id_mapping.values():
-            for id2, id1 in id_mapping.items():
-                if track_id1 == id1:
-                    updated_tracks1[i] = (track1, class_name1, id2, mask1)  # Update ID
-                    print("ID On Camera 1 Updated")
-                    break
+       if track_id1 in id_mapping.values():
+           for id2, id1 in id_mapping.items():
+               if track_id1 == id1:
+                   #print(f"Before Merge: ID in Camera 1: {track_id1}, class name1 {class_name1} ID in Camera 2: {id2} classname2 {class_name2}")
+                   updated_tracks1[i] = (track1, class_name1, id2, mask1)  # Update ID
+                   #print(f"After Merge: Updated ID in Camera 1: {id2}")
+                   break
     return id_mapping
 
 
@@ -144,38 +146,45 @@ def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2,
     
     return good_matches, id_mapping
 
-def process_tracks_and_extract_features(deepsort, detections, frame):
+def process_tracks_and_extract_features(deepsort, detections, frame, target_class="Tampak Depan"):
     """
     Updates tracks using DeepSORT, converts frame to grayscale,
-    and extracts SIFT features for tracked objects while pairing each track with its detection class.
+    and extracts SIFT features only for objects of the specified class.
     
     Args:
         deepsort: DeepSORT object for tracking.
-        detections: List of detections (each detection is a tuple of (bbox, conf, class_name, mask)).
+        detections: List of detections in the format 
+                    ([xmin, ymin, width, height], conf, class_name, mask).
         frame: The current video frame.
+        target_class: The class name that should be processed (default: "Tampak Depan").
     
     Returns:
-        tracked_objects: List of tuples containing (track, detection_class, track_id, mask).
-        keypoints: List of extracted keypoints.
-        descriptors: List of extracted descriptors.
+        tracks: List of active tracks (all).
+        keypoints: List of extracted keypoints for the target class.
+        descriptors: List of extracted descriptors for the target class.
     """
     # Update tracks with detections
     tracks = deepsort.update_tracks(detections, frame=frame)
 
-    # Convert frame to grayscale for SIFT
+    # Convert frame to grayscale for SIFT processing
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
+
+    # Initialize lists for keypoints and descriptors
     keypoints, descriptors = [], []
-    
-    for track in tracks:
-        # Extract SIFT features for each tracked object
-        kp, des = extract_sift_features(track, gray_frame)
-        if kp:
-            keypoints.extend(kp)
-            if des is not None:
-                descriptors.extend(des)
-    
+
+    # Process only tracks that match the target class
+    for track, detection in zip(tracks, detections):
+        _, _, class_name, _ = detection  # Extract class name from detection
+        if class_name == target_class:  # Only process "Tampak Depan"
+            #print(f"Processing track for class '{target_class}': {track}")
+            kp, des = extract_sift_features(track, gray_frame)
+            if kp:
+                keypoints.extend(kp)
+                if des is not None:
+                    descriptors.extend(des)
+
     return tracks, keypoints, descriptors
+
 
 
 def draw_tracking_info(frame, tracks, estimated_heights, id_mappings=None, is_cam1=True):
