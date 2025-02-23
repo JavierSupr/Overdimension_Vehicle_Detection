@@ -20,7 +20,7 @@ def iou(box1, box2):
     return iou_score
 
 
-def merge_track_ids(tracks, detections):
+def merge_track_ids(tracks, detections, keypoints, descriptor):
     """Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with 'Truk'."""
     truck_tracks = []
     for track, detection in zip(tracks, detections):
@@ -32,17 +32,23 @@ def merge_track_ids(tracks, detections):
     for i, (track, detection) in enumerate(zip(tracks, detections)):
         bbox, conf, class_name, mask = detection
         track_id = track.track_id
-        
+
         if class_name in ["Tampak Depan", "Tampak Samping"]:
             for truck_track, truck_bbox in truck_tracks:
                 iou_score = iou(bbox, truck_bbox) 
                 if iou_score > 0.3:  # Overlapping with a truck
-                    #print(f"bbox {bbox} truck {truck_bbox} iou score {iou_score}")
-
                     track_id = truck_track.track_id
                     break
 
-        updated_tracks.append((track, class_name, track_id, mask))
+        # Retrieve corresponding keypoints and descriptor
+        #track_keypoints = keypoints[i] if i < len(keypoints) else None
+        #track_descriptor = descriptor[i] if i < len(descriptor) else None
+
+        # Print all required information
+        #print(f"bbox : {bbox} Track: {track}, Class: {class_name}, Track ID: {track_id}, Mask: {mask}, Keypoints: {track_keypoints}, Descriptor: {track_descriptor}")
         
+        updated_tracks.append((track, class_name, track_id, mask))
+        #for track, class_name, track_id, mask in updated_tracks:
+        #    print(f"Track: {track}, Class: {class_name}, Track ID: {track_id}")
     
     return updated_tracks

@@ -16,8 +16,8 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Tuple, Dict, List
 import base64
 from ultralytics import YOLO
-from dimension_estimation import  compute_reference_height, estimate_height
-
+from dimension_estimation import  compute_reference_height, estimate_height, get_final_estimated_heights
+from collections import deque
 
 PORT_1 = 5010  # Port for first video stream
 PORT_2 = 5011  # Port for second video stream
@@ -29,6 +29,8 @@ deepsort = DeepSort(max_age=10)
 
 WEBSOCKET_URL = "ws://localhost:8765"
 WEBSOCKET_PORT = 8765
+
+detections_buffer = {}
 
 async def websocket_sender(queue):
     """Sends frames from the queue to WebSocket clients asynchronously."""
@@ -108,20 +110,24 @@ def receive_video(sock, camera_name):
         print(f"[ERROR] Receiving video from {camera_name} failed: {e}")
         return None
 
-def extract_detections(sock_result, frame_id):
+def extract_detections(sock_result, frame_id, buffer_size=100):
     """Receives detections via UDP and applies them to the matching video frame using frame_id."""
     detections = []
-    sock_result.settimeout(0.05)  # Prevent blocking
 
     try:
         data, _ = sock_result.recvfrom(65535)
         message = json.loads(data.decode())
 
         received_frame_id = message.get("frame_id", None)  # Extract frame ID from JSON
+        #print(f"Received frame_id {received_frame_id}, Current frame_id {frame_id}")
 
-        # Match frame_id with the received detection results
-        if received_frame_id == frame_id:
-            for obj in message["objects"]:
+        if received_frame_id is not None:
+            # Store received detections in the buffer
+            detections_buffer[received_frame_id] = message["objects"]
+
+        # If there's a matching frame_id in the buffer, extract detections
+        if frame_id in detections_buffer:
+            for obj in detections_buffer.pop(frame_id):  # Remove after processing
                 class_name = obj["label"]
                 conf = float(obj["conf"])
                 bbox = obj["bbox"]
@@ -129,10 +135,15 @@ def extract_detections(sock_result, frame_id):
                 xmin, ymin, xmax, ymax = map(int, bbox)
                 detections.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name, mask))
 
-        return detections  # Return modified frame with detections
+        # Maintain buffer size to prevent memory overflow
+        if len(detections_buffer) > buffer_size:
+            oldest_frame_id = min(detections_buffer.keys())  # Remove the oldest entry
+            del detections_buffer[oldest_frame_id]
 
     except socket.timeout:
-        return []  # Return frame as is if no detections received
+        pass  # No data received, continue with empty detections
+
+    return detections 
 
 def keypoints_to_list(keypoints):
     """Convert cv2.KeyPoint objects to a list of tuples for serialization.
@@ -209,90 +220,125 @@ def display_video_with_masks(frame, updated_tracks):
 def process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data):
     """Handles video processing and adds frames to queue instead of blocking WebSocket."""
   
-    sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_video.bind(("0.0.0.0", video_port))
-    sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_result.bind(("0.0.0.0", result_port))
-    #estimated_heights = 2
-    #model = YOLO("best.pt") 
-    #cap = cv2.VideoCapture(video_path)
+    #sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #sock_video.bind(("0.0.0.0", video_port))
+    #sock_result = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #sock_result.bind(("0.0.0.0", result_port))
+    estimated_height = 2
+    model = YOLO("best.pt") 
+    cap = cv2.VideoCapture(video_path)
     
     while True:
-            frame, frame_id = receive_video(sock_video, camera_name)
-            if frame is None or frame_id is None:
-                continue  # Skip if invalid frame
-            # Receive inference results
-            detections = extract_detections(sock_result, frame_id)
+        try:
+           # frame, frame_id = receive_video(sock_video, camera_name)
+           # if frame is None or frame_id is None:
+           #     continue  # Skip if invalid frame
+           # # Receive inference results
+           # #print("-2")
+           # detections = extract_detections(sock_result, frame_id)
                 # Use 'yolov8n.pt' for a small model
+            #print("-1")
             tampak_depan_data = {}
 
-            #ret, frame = cap.read()
-            #if not ret:
-            #    break
-            #frame = cv2.resize(frame, (640,480))
-            #results = model(frame, verbose=False)[0]
-            #detections = []
-            #for result in results:
-            #    boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
-            #    masks = result.masks.data.cpu().numpy() if result.masks else None  # Segmentation masks
-            #    confidences = result.boxes.conf.cpu().numpy()  # Confidence scores
-            #    class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Class IDs
-            #    class_names = [model.names[i] for i in class_ids]  # Class names
-#
-            #    for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
-            #        xmin, ymin, xmax, ymax = box
-            #        width, height = xmax - xmin, ymax - ymin
-            #        mask = masks[i] if masks is not None else None  # Assign mask if available
-            #        print(f"mask {mask}")
-            #        detections.append((
-            #            [xmin, ymin, width, height],  # Bounding box
-            #            conf,  # Confidence score
-            #            class_name,  # Class name
-            #            mask  # Mask (None if not available)
-            #        ))
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.resize(frame, (640,480))
+            results = model(frame, verbose=False, conf=0.8)[0]
+            detections = []
+            for result in results:
+                boxes = result.boxes.xyxy.cpu().numpy()  # Bounding boxes (x1, y1, x2, y2)
+                masks = [mask.tolist() for mask in result.masks.data.cpu().numpy()] if result.masks else None  # Formatted masks
+                confidences = result.boxes.conf.cpu().numpy()  # Confidence scores
+                class_ids = result.boxes.cls.cpu().numpy().astype(int)  # Class IDs
+                class_names = [model.names[i] for i in class_ids]  # Class names
+                #if result.masks:
+                #    print("Mask Data Type:", type(result.masks.data))
+                #    print("Mask Shape:", result.masks.data.shape)  # Check dimensions
+                #    print("Sample Mask Data:", result.masks.data[0].cpu().numpy())  # Print one mask example
 
+                for i, (box, conf, class_name) in enumerate(zip(boxes, confidences, class_names)):
+                    xmin, ymin, xmax, ymax = box
+                    width, height = xmax - xmin, ymax - ymin
+                    mask = masks[i] if masks is not None else None  # Assign mask if available
 
+                    detections.append((
+                        [xmin, ymin, width, height],  # Bounding box
+                        conf,  # Confidence score
+                        class_name,  # Class name
+                        mask  # Mask (None if not available)
+                    ))
+                    #print(f"detections {detections}")
             if detections:
+                #print("0000")
                 if camera_name == "Camera 1":
-                    tracks, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    tracked_objects1 = merge_track_ids(tracks, detections)
-                    reference_height = compute_reference_height(tracked_objects1, detections, tampak_depan_data)
-                    estimated_height = estimate_height(tracked_objects1, reference_height)
-                    draw_frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
+                    try:
+                        tracks1, keypoints1, descriptors1 = process_tracks_and_extract_features(deepsort, detections, frame)
+                        #descriptors1 = np.array(descriptors1)
 
-                    # Store data in shared dictionary
-                    shared_data["tracked_objects1"] = tracked_objects1
-                    shared_data["keypoints1"] = keypoints_to_list(keypoints1)
-                    shared_data["descriptors1"] = descriptors1
+                        #print(f"Descriptor1 Shape: {descriptors1}")
 
-                    if camera_name == "Camera 1":
-                        if all(k in shared_data for k in ["tracked_objects1", "keypoints1", "descriptors1", 
-                                                          "tracked_objects2", "keypoints2", "descriptors2"]):
-                            if shared_data["descriptors1"] is not None and shared_data["descriptors2"] is not None:
-                                keypoints2 = list_to_keypoints(shared_data["keypoints2"])                                 
-                                good_matches, id_mapping = match_features(
-                                    shared_data["descriptors1"], shared_data["descriptors2"],
-                                    shared_data["tracked_objects1"], shared_data["tracked_objects2"],
-                                    keypoints1, keypoints2
-                                )
-                                #print(f"id mapping {id_mapping}")
-                                #for track_id in id_mapping.values():  # or id_mapping.keys() depending on your structure
-                                    #if not check_id_exists(track_id):
-                                    #print(f"tracked object {tracked_objects1}")
-                                    #save_violation_to_mongodb(track_id, frame, tracked_objects1)
-                                frame = draw_tracking_info(draw_frame, tracked_objects1, estimated_height, id_mapping)
+                        #print("1")
+                        tracked_objects1 = merge_track_ids(tracks1, detections, keypoints1, descriptors1)
+                        #print(f"tracked object {tracked_objects1}")
+                        #print(f"tracked object 1 {tracked_objects1}")
+                        #print("2")
+                        reference_height = compute_reference_height(tracked_objects1, detections, tampak_depan_data)
+                        #print(f"tampak depan data {tampak_depan_data}")
+                        estimated_height, height_records = estimate_height(tracked_objects1, reference_height)
+                        final_heights = get_final_estimated_heights(height_records)
+                        #print("4")
+                        frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
+                        #print("5")
+                        # Store data in shared dictionary
+                        #shared_data["tracked_objects1"] = tracked_objects1
+                        #shared_data["keypoints1"] = keypoints_to_list(keypoints1)
+                        #shared_data["descriptors1"] = descriptors1
+
+
+                        #if all(k in shared_data for k in ["tracked_objects1", "keypoints1", "descriptors1", 
+                        #                                      "tracked_objects2", "keypoints2", "descriptors2"]):
+                        #        #print("masuk -2")   
+                        #        if shared_data["descriptors1"] is not None and shared_data["descriptors2"] is not None:
+                        #            #print("masuk -1")
+                        #            keypoints2 = list_to_keypoints(shared_data["keypoints2"])                                 
+                        #            #print("masuk 0")
+                        #            good_matches, tracked_objects1 = match_features(
+                        #                shared_data["descriptors1"], shared_data["descriptors2"],
+                        #                shared_data["tracked_objects1"], shared_data["tracked_objects2"],
+                        #                keypoints1, keypoints2)
+                        #            #print("6")
+                        #            #print(f"id mapping {id_mapping}")
+                        #            #for track_id in id_mapping.values():  # or id_mapping.keys() depending on your structure
+                        #               #if not check_id_exists(track_id):
+                        #               #print(f"tracked object {tracked_objects1}")
+                                       #save_violation_to_mongodb(track_id, frame, tracked_objects1)
+                        #frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
+                                    #print("7")
+                    except Exception as e:
+                        print(f"Error matching features: {e}")
+                        continue
 
                 elif camera_name == "Camera 2":
-                    tracked_objects2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
-                    tracked_objects2 = merge_track_ids(tracked_objects2, detections)
-                    reference_height = compute_reference_height(tracked_objects2, detections, tampak_depan_data)
-                    estimated_height = estimate_height(tracked_objects2, reference_height)
-                    frame = draw_tracking_info(frame, tracked_objects2, estimated_height)
-
-                    shared_data["tracked_objects2"] = tracked_objects2
-                    shared_data["keypoints2"] = keypoints_to_list(keypoints2)
-                    shared_data["descriptors2"] = descriptors2
-
+                    try:
+                        tracks2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
+                        #print("1.1")
+                        tracked_objects2 = merge_track_ids(tracks2, detections, keypoints2, descriptors2)
+                        #print(f"tracked object 2 {tracked_objects2}")
+                        #print("2.1")
+                        #reference_height = compute_reference_height(tracked_objects2, detections, tampak_depan_data)
+                        #print("3.1")
+                        #estimated_height = estimate_height(tracked_objects2, reference_height)
+                        #print("4.1")
+                        frame = draw_tracking_info(frame, tracked_objects2, estimated_height, is_cam1=False)
+                        #print("5.1")
+                        shared_data["tracked_objects2"] = tracked_objects2
+                        shared_data["keypoints2"] = keypoints_to_list(keypoints2)
+                        shared_data["descriptors2"] = descriptors2
+                    
+                    except Exception as e:
+                        print(f"Error processing Camera 2: {e}")
+                        continue
             if not queue.full():
                 queue.put((camera_name, frame))
 
@@ -300,6 +346,9 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             cv2.imshow(camera_name, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+        except Exception as e:
+            print(f"Unexpected error in main loop: {e}")
+            continue
 def start_websocket_process(queue):
     """Start the WebSocket process and pass the queue."""
     asyncio.run(websocket_sender(queue))
@@ -309,24 +358,26 @@ def start_process(video_port, result_port, camera_name, queue, video_path, share
     asyncio.run(process_and_stream_frames(video_port, result_port, camera_name, queue, video_path, shared_data))
 
 if __name__ == "__main__":
-    video_path = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/333 VID_20231011_170120.mp4"
+    video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0800.MOV"
+    #video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4"
+    video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4"
 
     try:
         manager = multiprocessing.Manager()
         shared_data = manager.dict()  # Shared dictionary for inter-process communication
         frame_queue = multiprocessing.Queue(maxsize=10)  # Shared queue
 
-        process_websocket = multiprocessing.Process(target=start_websocket_process, args=(frame_queue,))
-        process1 = multiprocessing.Process(target=start_process, args=(PORT_1, PORT_RESULT_1, "Camera 1", frame_queue, video_path, shared_data))
-        process2 = multiprocessing.Process(target=start_process, args=(PORT_2, PORT_RESULT_2, "Camera 2", frame_queue, video_path, shared_data))
+        #process_websocket = multiprocessing.Process(target=start_websocket_process, args=(frame_queue,))
+        process1 = multiprocessing.Process(target=start_process, args=(PORT_1, PORT_RESULT_1, "Camera 1", frame_queue, video_path1, shared_data))
+        #process2 = multiprocessing.Process(target=start_process, args=(PORT_2, PORT_RESULT_2, "Camera 2", frame_queue, video_path2, shared_data))
 
-        process_websocket.start()
+        #process_websocket.start()
         process1.start()
-        process2.start()
+        #process2.start()
 
         process1.join()
-        process2.join()
-        process_websocket.join()
+        #process2.join()
+        #process_websocket.join()
 
     except KeyboardInterrupt:
         print("\n[INFO] Program stopped by user.")

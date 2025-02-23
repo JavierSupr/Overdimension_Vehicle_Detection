@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import random
 
 sift = cv2.SIFT_create()
 id_mappings = {}
@@ -36,20 +37,20 @@ def extract_sift_features(track, gray_frame):
 
 def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping):
     """
-    Updates ID mappings by assigning Camera 1 object IDs to the corresponding Camera 2 object IDs.
+    Updates ID mappings by assigning Camera 2 object IDs to the corresponding Camera 1 object IDs.
     
     Args:
-        tracks1 (list): Bounding boxes and IDs from Camera 1.
-        tracks2 (list): Bounding boxes and IDs from Camera 2.
+        updated_tracks1 (list): Bounding boxes and IDs from Camera 1.
+        updated_tracks2 (list): Bounding boxes and IDs from Camera 2.
         keypoints1 (list): Keypoints from Camera 1.
         keypoints2 (list): Keypoints from Camera 2.
         good_matches (list): List of good matches between keypoints from both cameras.
+        id_mapping (dict): Existing ID mappings {Camera2_ID: Camera1_ID}.
     
     Returns:
-        dict: Updated ID mappings {old_id: new_id}.
+        list: Updated tracks1 with assigned IDs from Camera 2.
     """
     # Create a mapping from Camera 2 IDs to Camera 1 IDs
-    
     for match in good_matches:
         kp1_idx = match.queryIdx  # Index of keypoint in Camera 1
         kp2_idx = match.trainIdx  # Index of keypoint in Camera 2
@@ -59,35 +60,33 @@ def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2,
         
         for track_obj in updated_tracks2:
             track2, class_name2, track_id2, mask2 = track_obj
-            if is_point_in_bbox(keypoints2[kp2_idx].pt, track2.to_tlbr()):  # Use track.to_tlbr() for bounding box
-                id2 = track_id2  # Get the track ID
-                #print(f"classname2 {class_name2}")
+            if is_point_in_bbox(keypoints2[kp2_idx].pt, track2.to_tlbr()):
+                id2 = track_id2
                 break
         
         for track_obj in updated_tracks1:
             track1, class_name1, track_id1, mask1 = track_obj
-            if is_point_in_bbox(keypoints1[kp1_idx].pt, track1.to_tlbr()):  # Use track.to_tlbr()
-                id1 = track_id1  # Get the track ID
-                #print(f"classname1 {class_name1}")
-
+            if is_point_in_bbox(keypoints1[kp1_idx].pt, track1.to_tlbr()):
+                id1 = track_id1
                 break
         
         if id1 is not None and id2 is not None:
             # Assign Camera 2 ID to Camera 1 ID
-            if id2 not in id_mapping:
-                id_mapping[id2] = id1
-        
-        
+            id_mapping[id2] = id1
+    
     # Update tracks in Camera 1 with IDs from Camera 2
-    for i, (track1, class_name1, track_id1, mask1) in enumerate(updated_tracks1):
-       if track_id1 in id_mapping.values():
-           for id2, id1 in id_mapping.items():
-               if track_id1 == id1:
-                   #print(f"Before Merge: ID in Camera 1: {track_id1}, class name1 {class_name1} ID in Camera 2: {id2} classname2 {class_name2}")
-                   updated_tracks1[i] = (track1, class_name1, id2, mask1)  # Update ID
-                   #print(f"After Merge: Updated ID in Camera 1: {id2}")
-                   break
-    return id_mapping
+    updated_tracks = []
+    for track1, class_name1, track_id1, mask1 in updated_tracks1:
+        new_id = track_id1  # Default to the existing ID
+        for id2, id1 in id_mapping.items():
+            if track_id1 == id1:
+                new_id = id2  # Assign the Camera 2 ID
+                break
+        
+        updated_tracks.append((track1, class_name1, new_id, mask1))
+    
+    return updated_tracks
+
 
 
 def is_point_in_bbox(point, bbox):
@@ -123,82 +122,125 @@ def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2,
         list: List of good matches between frames
     """
     id_mapping = {}  # {id2: id1}
-
     good_matches = []
+
+    #print("=== Descriptor Information BEFORE Conversion ===")
+    #print(f"Descriptor1 Type: {type(descriptors1)}")
+    #print(f"Descriptor2 Type: {type(descriptors2)}")
+
+    # Convert descriptors to NumPy arrays if they are lists
+
+    #print("=== Descriptor Information AFTER Conversion ===")
+    #print(f"Descriptor1 Type: {type(descriptors1)}")
+    #print(f"Descriptor2 Type: {type(descriptors2)}")
+
+    #if descriptors1 is not None:
+    #    #print(f"Descriptor1 Shape: {descriptors1.shape}")
+    #    #print(f"Descriptor1 Dtype: {descriptors1.dtype}")
+#
+    #if descriptors2 is not None:
+    #    print(f"Descriptor2 Shape: {descriptors2.shape}")
+    #    print(f"Descriptor2 Dtype: {descriptors2.dtype}")
 
     if descriptors1 is not None and descriptors2 is not None:
         try:
             descriptors1 = np.array(descriptors1)
             descriptors2 = np.array(descriptors2)
+            #print(f"Descriptor1 Shape: {descriptors1.shape}")
+            #print(f"Descriptor2 Shape: {descriptors2.shape}")
             bf = cv2.BFMatcher()
             matches = bf.knnMatch(descriptors1, descriptors2, k=2)
-            
+            #print("masuk 1")
+
             for match_pair in matches:
+                #print("masuk 2")
                 if len(match_pair) == 2:
+                    #print("masuk 3")
                     m, n = match_pair
                     if m.distance < 0.75 * n.distance:
+                        #print("masuk 4")
                         good_matches.append(m)
-            
-            id_mapping = update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping)
-            
+                        #print(good_matches)
+
+            updated_tracks1 = update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping)
+
         except Exception as e:
             print(f"Error in feature matching: {e}")
-    
-    return good_matches, id_mapping
+
+    return good_matches, updated_tracks1
+
+
+
+def extract_sift_features(track, gray_frame):
+    """
+    Extracts SIFT features from the bounding box of the given track in the grayscale frame.
+
+    Args:
+        track: A DeepSORT track object with bbox in [x, y, w, h] format.
+        gray_frame: The grayscale video frame.
+
+    Returns:
+        keypoints: List of detected keypoints.
+        descriptors: Corresponding descriptors of the keypoints.
+    """
+    x, y, w, h = map(int, track.to_tlwh())  # Convert bbox to integer
+
+    # Ensure bounding box is within frame limits
+    h, w = gray_frame.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(w, x + w), min(h, y + h)
+
+    # Extract ROI from grayscale frame
+    roi = gray_frame[y1:y2, x1:x2]
+
+    if roi.size == 0:
+        return [], None  # Return empty if ROI is invalid
+
+    # Initialize SIFT
+    sift = cv2.SIFT_create()
+
+    # Detect and compute keypoints & descriptors
+    keypoints, descriptors = sift.detectAndCompute(roi, None)
+
+    return keypoints, descriptors
 
 def process_tracks_and_extract_features(deepsort, detections, frame, target_class="Tampak Depan"):
-    """
-    Updates tracks using DeepSORT, converts frame to grayscale,
-    and extracts SIFT features only for objects of the specified class.
+    # Filter out only the detections that have class_name as "Tampak Depan"
+    filtered_detections = []
     
-    Args:
-        deepsort: DeepSORT object for tracking.
-        detections: List of detections in the format 
-                    ([xmin, ymin, width, height], conf, class_name, mask).
-        frame: The current video frame.
-        target_class: The class name that should be processed (default: "Tampak Depan").
-    
-    Returns:
-        tracks: List of active tracks (all).
-        keypoints: List of extracted keypoints for the target class.
-        descriptors: List of extracted descriptors for the target class.
-    """
-    # Update tracks with detections
-    tracks = deepsort.update_tracks(detections, frame=frame)
+    for idx, det in enumerate(detections):  
+        bbox, conf, class_name, mask = det  # Unpack detection tuple
+        if class_name == target_class:  # Accessing index [2] which is the class name
+            filtered_detections.append(det)  # Append only valid detections
+        elif class_name != target_class:  # If class_name is NOT "Tampak Depan", return only tracks
+            return deepsort.update_tracks(detections, frame=frame), [], []
+
+    # Update DeepSORT with only "Tampak Depan" detections
+    tracks = deepsort.update_tracks(filtered_detections, frame=frame)
 
     # Convert frame to grayscale for SIFT processing
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Initialize lists for keypoints and descriptors
+    # Initialize lists for storing SIFT features
     keypoints, descriptors = [], []
 
-    # Process only tracks that match the target class
-    for track, detection in zip(tracks, detections):
-        _, _, class_name, _ = detection  # Extract class name from detection
-        if class_name == target_class:  # Only process "Tampak Depan"
-            #print(f"Processing track for class '{target_class}': {track}")
-            kp, des = extract_sift_features(track, gray_frame)
-            if kp:
-                keypoints.extend(kp)
-                if des is not None:
-                    descriptors.extend(des)
+    for track in tracks:
+        kp, des = extract_sift_features(track, gray_frame)
+        if kp:
+            keypoints.extend(kp)
+            if des is not None:
+                descriptors.extend(des)
 
     return tracks, keypoints, descriptors
 
 
-
-def draw_tracking_info(frame, tracks, estimated_heights, id_mappings=None, is_cam1=True):
+def draw_tracking_info(frame, tracks, estimated_heights, is_cam1=True):
     """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights."""
-    if id_mappings is None:
-        id_mappings = {}
 
     for track_obj in tracks:
         track, class_name, track_id, mask = track_obj
         if not track.is_confirmed():
             continue
-        
-        if not is_cam1:
-            track_id = id_mappings.get(track_id, track_id)
         
         ltrb = track.to_ltrb()
         x1, y1, x2, y2 = map(int, ltrb)
@@ -213,10 +255,10 @@ def draw_tracking_info(frame, tracks, estimated_heights, id_mappings=None, is_ca
 
         # Check if the estimated height is available
         height_label = ""
-        if track_id in estimated_heights:
-            estimated_height = estimated_heights[track_id]
-            height_label = f'Height: {estimated_height:.2f}m'
-            cv2.putText(frame, height_label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        #if track_id in estimated_heights:
+        #    estimated_height = estimated_heights[track_id]
+        #    height_label = f'Height: {estimated_height:.2f}m'
+        #    cv2.putText(frame, height_label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
     return frame
 
