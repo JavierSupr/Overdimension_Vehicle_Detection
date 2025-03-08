@@ -20,35 +20,31 @@ def iou(box1, box2):
     return iou_score
 
 
-def merge_track_ids(tracks, detections, keypoints, descriptor):
+
+def merge_track_ids(tracking_results):
     """Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with 'Truk'."""
     truck_tracks = []
-    for track, detection in zip(tracks, detections):
-        bbox, conf, class_name, mask = detection
-        if class_name == "Truk":
-            truck_tracks.append((track, bbox))
+    for track in tracking_results:
+        if track['class_name'] == "Truk":
+            truck_tracks.append((track['track_id'], track['bounding box']))
     
     updated_tracks = []
-    for i, (track, detection) in enumerate(zip(tracks, detections)):
-        bbox, conf, class_name, mask = detection
-        track_id = track.track_id
-
-        if class_name in ["Tampak Depan", "Tampak Samping"]:
-            for truck_track, truck_bbox in truck_tracks:
-                iou_score = iou(bbox, truck_bbox) 
-                if iou_score > 0.3:  # Overlapping with a truck
-                    track_id = truck_track.track_id
+    for track in tracking_results:
+        track_id = track['track_id']
+        if track['class_name'] in ["Tampak Depan", "Tampak Samping"]:
+            for truck_id, truck_bbox in truck_tracks:
+                if iou(track['bounding box'], truck_bbox) > 0.3:
+                    track_id = truck_id
                     break
-
-        # Retrieve corresponding keypoints and descriptor
-        #track_keypoints = keypoints[i] if i < len(keypoints) else None
-        #track_descriptor = descriptor[i] if i < len(descriptor) else None
-
-        # Print all required information
-        #print(f"bbox : {bbox} Track: {track}, Class: {class_name}, Track ID: {track_id}, Mask: {mask}, Keypoints: {track_keypoints}, Descriptor: {track_descriptor}")
         
-        updated_tracks.append((track, class_name, track_id, mask))
-        #for track, class_name, track_id, mask in updated_tracks:
-        #    print(f"Track: {track}, Class: {class_name}, Track ID: {track_id}")
+        updated_tracks.append({
+            'track_id': track_id,
+            'class_name': track['class_name'],
+            'bounding box': track['bounding box'],
+            'kp': track['kp'],
+            'des': track['des'],
+            'mask': track['mask']
+        })
+
     
     return updated_tracks

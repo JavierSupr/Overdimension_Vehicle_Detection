@@ -1,6 +1,9 @@
 import cv2
 import numpy as np
 import random
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
+deepsort = DeepSort(max_age=30)  # Inisialisasi DeepSORT
 
 sift = cv2.SIFT_create()
 id_mappings = {}
@@ -81,6 +84,7 @@ def update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2,
         for id2, id1 in id_mapping.items():
             if track_id1 == id1:
                 new_id = id2  # Assign the Camera 2 ID
+                print(f"Updated Camera 1 ID {track_id1} to Camera 2 ID {new_id}")
                 break
         
         updated_tracks.append((track1, class_name1, new_id, mask1))
@@ -123,44 +127,28 @@ def match_features(descriptors1, descriptors2, updated_tracks1, updated_tracks2,
     """
     id_mapping = {}  # {id2: id1}
     good_matches = []
-
-    #print("=== Descriptor Information BEFORE Conversion ===")
-    #print(f"Descriptor1 Type: {type(descriptors1)}")
-    #print(f"Descriptor2 Type: {type(descriptors2)}")
-
-    # Convert descriptors to NumPy arrays if they are lists
-
-    #print("=== Descriptor Information AFTER Conversion ===")
-    #print(f"Descriptor1 Type: {type(descriptors1)}")
-    #print(f"Descriptor2 Type: {type(descriptors2)}")
-
-    #if descriptors1 is not None:
-    #    #print(f"Descriptor1 Shape: {descriptors1.shape}")
-    #    #print(f"Descriptor1 Dtype: {descriptors1.dtype}")
-#
-    #if descriptors2 is not None:
-    #    print(f"Descriptor2 Shape: {descriptors2.shape}")
-    #    print(f"Descriptor2 Dtype: {descriptors2.dtype}")
-
-    if descriptors1 is not None and descriptors2 is not None:
+    #print(f"keypoint1 {keypoints1}")
+    #print(f"keypoint2 {keypoints2}")
+    if descriptors1 is not None and descriptors2 is not None and len(descriptors1) > 0 and len(descriptors2) > 0:
         try:
-            descriptors1 = np.array(descriptors1)
-            descriptors2 = np.array(descriptors2)
-            #print(f"Descriptor1 Shape: {descriptors1.shape}")
-            #print(f"Descriptor2 Shape: {descriptors2.shape}")
+            # Ensure descriptors are numpy arrays of type float32
+            descriptors1 = np.asarray(descriptors1, dtype=np.float32)
+            descriptors2 = np.asarray(descriptors2, dtype=np.float32)
+
+            # Check shape consistency
+            if descriptors1.shape[1] != descriptors2.shape[1]:
+                print(f"Shape mismatch: descriptors1.shape={descriptors1.shape}, descriptors2.shape={descriptors2.shape}")
+                return [], updated_tracks1
+
             bf = cv2.BFMatcher()
             matches = bf.knnMatch(descriptors1, descriptors2, k=2)
-            #print("masuk 1")
 
             for match_pair in matches:
-                #print("masuk 2")
                 if len(match_pair) == 2:
-                    #print("masuk 3")
                     m, n = match_pair
                     if m.distance < 0.75 * n.distance:
-                        #print("masuk 4")
                         good_matches.append(m)
-                        #print(good_matches)
+
 
             updated_tracks1 = update_id_mappings(updated_tracks1, updated_tracks2, keypoints1, keypoints2, good_matches, id_mapping)
 
@@ -204,62 +192,132 @@ def extract_sift_features(track, gray_frame):
 
     return keypoints, descriptors
 
-def process_tracks_and_extract_features(deepsort, detections, frame, target_class="Tampak Depan"):
-    # Filter out only the detections that have class_name as "Tampak Depan"
-    filtered_detections = []
+def calculate_iou(boxA, boxB):
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    interArea = max(0, xB - xA) * max(0, yB - yA)
+    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+    return iou
+
+def process_tracks_and_extract_features(detections, frame):
     
-    for idx, det in enumerate(detections):  
-        bbox, conf, class_name, mask = det  # Unpack detection tuple
-        if class_name == target_class:  # Accessing index [2] which is the class name
-            filtered_detections.append(det)  # Append only valid detections
-        elif class_name != target_class:  # If class_name is NOT "Tampak Depan", return only tracks
-            return deepsort.update_tracks(detections, frame=frame), [], []
-
-    # Update DeepSORT with only "Tampak Depan" detections
-    tracks = deepsort.update_tracks(filtered_detections, frame=frame)
-
-    # Convert frame to grayscale for SIFT processing
+    detections2 = [det[:3] for det in detections]
+    tracks = deepsort.update_tracks(detections2, frame=frame)
+    # Konversi frame ke grayscale untuk ekstraksi fitur SIFT
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Inisialisasi list hasil
+    tracking_results = []
+    filtered_tracks = []
+    filtered_detections = []
+    keypoints_result = []
+    descriptors_result = []
+    xyxy = []
+    detection_dict = {
+        det[2]: det[3]  # { class_name: mask }
+        for det in detections
+    }
 
-    # Initialize lists for storing SIFT features
-    keypoints, descriptors = [], []
+    for track, detection in zip(tracks, detections):
+        #class_name = detection[2]  # Nama kelas objek yang terdeteksi
 
-    for track in tracks:
-        kp, des = extract_sift_features(track, gray_frame)
-        if kp:
-            keypoints.extend(kp)
-            if des is not None:
-                descriptors.extend(des)
-
-    return tracks, keypoints, descriptors
-
-
-def draw_tracking_info(frame, tracks, estimated_heights, is_cam1=True):
-    """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights."""
-
-    for track_obj in tracks:
-        track, class_name, track_id, mask = track_obj
-        if not track.is_confirmed():
-            continue
+        x, y, w, h = detection[0]
+        #mask = None
+        xw = x + w
+        yh = y + h
+        det_bbox = [x, y, xw, yh]
         
+
+        track_id = track.track_id
+        class_id = track.det_class
+        mask = detection_dict.get(class_id, None)
         ltrb = track.to_ltrb()
         x1, y1, x2, y2 = map(int, ltrb)
+        track_bbox = [x1, y1, x2, y2]
+
+        if class_id == "Tampak Depan":
+            #print("masukkk2")
+            # Ekstraksi fitur SIFT hanya untuk 'Tampak Depan'
+            kp, des = extract_sift_features(track, gray_frame)
+            if kp:
+                keypoints_result.extend(kp)
+            if des is not None:
+                descriptors_result.extend(des.tolist())
+            kp = 2
+            des = 3
+            tracking_results.append({"track_id" : track_id,
+                         "class_name" : class_id,
+                         "bounding box" : [x1, y1, x2, y2],
+                         "kp" : kp,
+                         "des" : des,
+                         "mask" : mask
+                        })
+        else:
+            tracking_results.append({"track_id" : track_id,
+             "class_name" : class_id,
+             "bounding box" : [x1, y1, x2, y2],
+             "kp" : None,
+             "des" : None,
+             "mask" : mask
+            })
+            # Untuk 'Truk' dan 'Tampak Samping', hanya simpan tracks & detections
+            keypoints_result = []
+            descriptors_result = []
+
+        #label = f'ID: {track_id}'
+        #print(f"tracking result {tracking_results}")
+        #cv2.putText(frame, label, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # Simpan hasil sesuai kategori
+        #filtered_tracks.append((track, detection_without_mask))
+        #print(f"filtered tracks {filtered_tracks}")
+        #filtered_detections.append(detection_without_mask)
+    #()
+    #print()
+    #print()
+    # Cetak hasil deteksi tanpa mask dan keypoints
+    #print("\nFiltered Detections (Tanpa Mask):")
+    #for det in filtered_detections:
+    #    print(det)
+#
+    #print("\nKeypoints Result:")
+    #print(keypoints_result)
+
+    return tracking_results, frame
+
+
+def draw_tracking_info(frame, tracking_results, is_cam1=True):   
+    """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights, and overlays masks."""
+    
+    for track in tracking_results:
+        track_id = track['track_id']
+        x1, y1, x2, y2 = map(int, track['bounding box'])
+        mask = track.get('mask')  # Assuming the mask is in the tracking result
+        
+        if track['class_name'] == "Truk":
+            color = (0, 255, 0)  # Green
+        elif track['class_name'] == "Tampak Samping":
+            color = (0, 255, 255)  # Yellow
+        elif track['class_name'] == "Tampak Depan":
+            color = (0, 0, 255)  # Red
+        else:
+            color = (255, 255, 255)  # Default white
         
         # Draw bounding box
-        color = (0, 255, 0)  # Green for tracked objects
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
         # Draw ID and class name
-        label = f'ID: {track_id} ({class_name})'
+        label = f'ID: {track_id}'
         cv2.putText(frame, label, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-        # Check if the estimated height is available
-        height_label = ""
-        #if track_id in estimated_heights:
-        #    estimated_height = estimated_heights[track_id]
-        #    height_label = f'Height: {estimated_height:.2f}m'
-        #    cv2.putText(frame, height_label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Overlay mask if available
+        if mask is not None and mask.size > 0:
+            mask = mask.reshape((-1, 1, 2)).astype(np.int32)  # Reshape mask to contour format
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [mask], color)
+            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend mask with the frame
     
     return frame
-
-
