@@ -16,48 +16,40 @@ def check_id_exists(track_id):
     """Check if a track_id already exists in MongoDB."""
     return collection.find_one({'licensePlate': f"ID_{track_id}"}) is not None
 
-def draw_mask_on_detected_tracks(frame, updated_tracks, detected_track_ids):
+def draw_mask_on_detected_tracks(frame, tracked_objects):
     """
-    Draws the mask for each detected track_id on the given frame with different colors based on class.
+    Draws the segmentation mask for detected objects on the frame with different colors based on class names.
 
     Parameters:
-        frame (numpy.ndarray): The frame where the masks will be drawn.
-        updated_tracks (list): List of dictionaries containing track info (track_id, class_name, mask).
-        detected_track_ids (list): List of track_ids that were detected.
-
-    Returns:
-        numpy.ndarray: The frame with masks drawn.
+        frame (numpy array): The current video frame.
+        tracked_objects (list): List of detected objects with masks.
     """
     # Define colors for each class
     class_colors = {
-        "Tampak Depan": (255, 0, 0),   # Red
-        "Tampak Samping": (0, 255, 0), # Green
-        "Truk": (0, 0, 255)            # Blue
+        "Tampak Depan": (255, 0, 0),  # Blue
+        "Tampak Samping": (0, 255, 0),  # Green
+        "Truk": (0, 0, 255)  # Red
     }
 
-    for track in updated_tracks:
-        if isinstance(track, dict):  # Ensure track is a dictionary
-            track_id = track.get("track_id")
-            class_name = track.get("class_name", "Unknown")
-            mask = track.get("mask")
+    for track in tracked_objects:
+        mask = track.get("mask")
+        class_name = track.get("class_name")
 
-            if track_id in detected_track_ids and isinstance(mask, np.ndarray):
-                color = class_colors.get(class_name, (255, 255, 255))  # Default: White
+        if mask is not None and mask.size > 0 and class_name in class_colors:
+            color = class_colors[class_name]
+            mask = mask.reshape((-1, 1, 2)).astype(np.int32)  # Reshape mask to contour format
+            
+            # Create an overlay for transparency
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [mask], color)  # Draw mask
+            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend mask with frame
 
-                # Ensure mask dimensions match the frame
-                if mask.shape[:2] == frame.shape[:2]:
-                    frame[mask > 0] = frame[mask > 0] * 0.5 + np.array(color) * 0.5
-
-                    # Draw bounding box and ID text
-                    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    #if contours:
-                    #    x, y, w, h = cv2.boundingRect(contours[0])
-                        #cv2.putText(frame, f"{class_name} (ID {track_id})", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                        #            0.7, color, 2, cv2.LINE_AA)
-        else:
-            print("Warning: Track data is not a dictionary:", track)
+            # Draw bounding box
+            x1, y1, x2, y2 = track["bounding box"]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
     return frame
+
 
 
 def convert_tracked_objects_to_dict(tracked_objects):
@@ -84,30 +76,22 @@ def convert_tracked_objects_to_dict(tracked_objects):
     
     return tracked_dicts
 
-def save_violation_to_mongodb(track_id, height, frame, updated_tracks):
-    """Save violation data and image to MongoDB, with masks drawn for detected tracks."""
+def save_violation_to_mongodb(frame, track_id, height, reference_number):
+    """
+    Saves violation data to MongoDB, including an image with a mask drawn.
+
+    Parameters:
+        frame (numpy array): The processed video frame.
+        track_id (int): Unique ID of the tracked object.
+        height (float): Estimated object height.
+        reference_number (str): Reference number for the record.
+    """
     try:
-        # Check if ID already exists
-        #if check_id_exists(track_id):
-        #    print(f"ID_{track_id} already exists in database, skipping...")
-        #    return None
-        height = 2.2
-        # Get all detected track IDs for drawing masks
-        detected_track_ids = [track_id]
-        # Convert tracked_objects to the correct format
-        updated_tracks = convert_tracked_objects_to_dict(updated_tracks)
+        if check_id_exists(track_id):
+            return #print(f"Violation for Track ID {track_id} already exists. Skipping save.")
 
-        # Now call the function with the corrected format
-        frame_with_mask = draw_mask_on_detected_tracks(frame, updated_tracks, detected_track_ids)
-
-        if isinstance(height, dict):  # Extract value if height is a dictionary
-            height = height.get("value", 0)
-
-        # Convert height to float safely
-        height = float(height)
-        
-        # Convert the frame to binary data
-        _, buffer = cv2.imencode('.jpg', frame_with_mask)
+        # Convert frame to binary format for storage
+        _, buffer = cv2.imencode('.jpg', frame)
         image_binary = buffer.tobytes()
 
         # Generate timestamp and image filename
@@ -120,8 +104,8 @@ def save_violation_to_mongodb(track_id, height, frame, updated_tracks):
         # Prepare violation data
         violation_data = {
             'timestamp': timestamp,
-            'location' : location,
-            'Reference Number' : reference_number,
+            'location': 'Jl. Pantura KM 23',  # Fixed location
+            'Reference Number': reference_number,
             'licensePlate': f"ID_{track_id}",
             'camera': "Camera 1",
             'violationImageId': image_id,  # Reference to the GridFS file ID
@@ -129,11 +113,10 @@ def save_violation_to_mongodb(track_id, height, frame, updated_tracks):
             'width': float(1.8)
         }
 
-        # Insert metadata into the main collection
-        result = collection.insert_one(violation_data)
-        print(f"Saved new violation with ID: {result.inserted_id}")
-        
-        return result.inserted_id
+        # Insert the violation record into the MongoDB collection
+        collection.insert_one(violation_data)
+
+        print(f"Violation saved for Track ID {track_id} with Image ID {image_id}")
+
     except Exception as e:
-        print(f"Error saving violation: {e}")
-        return None
+        print(f"Error saving violation for Track ID {track_id}: {e}")

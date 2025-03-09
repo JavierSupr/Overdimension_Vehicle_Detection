@@ -69,59 +69,57 @@ def is_within_range(mask, frame_width):
     
     return min_x >= left_bound and max_x <= right_bound
 
-def estimate_height(tracking_results, tampak_depan_data, height_records, object_tracking_status, is_append):
+def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
     estimated_heights = {}
-    detected_track_ids = []  # To store track_ids that passed for frame capture
     left_limit = frame_width * (6/8)   # 1/4 of the screen width (exit point)
     right_limit = frame_width * (7/8) 
-    detected_track_ids = []  # To store track_ids that passed for frame capture
-    to_remove = []  # Temporary list to store track IDs to be removed
 
     for track in tracking_results:
         if track['class_name'] == "Tampak Samping" and track['track_id'] in tampak_depan_data:
             x_min, y_min, x_max, y_max = track['bounding box']  # Extract bounding box coordinates
-            print(f"xmin {x_min}")
-            track_id = track['track_id']
-            # Track object entering from the right
-            if x_min >= right_limit and x_min <= left_limit: 
-                print("masukk") 
+
+            if track['track_id'] not in passed_limits:
+                passed_limits[track['track_id']] = {"left": False, "right": False}
+
+            # Check if object has crossed left limit
+            #if x_min <= left_limit:
+            #    passed_limits[track['track_id']]["left"] = True
+
+            # Check if object has crossed right limit
+            if x_min <= right_limit:
+                passed_limits[track['track_id']]["right"] = True
+
+            if x_min >= right_limit:
                 continue
 
-            # Check if the object has now exited past the left limit
-            if track_id in object_tracking_status and x_min <= left_limit:
-                print(f"The object {track_id} passed")  # Print when the object fully passes
-                detected_track_ids.append(track_id)  # Store the ID for mask drawing
-                to_remove.append(track_id)  # Mark for removal
+            current_mask_height = compute_height_from_mask(track['mask'])
+            known_mask_height = tampak_depan_data[track['track_id']]
 
-            # Height estimation process (only for valid tracking range)
-            if right_limit >= x_min >= left_limit:
-                current_mask_height = compute_height_from_mask(track['mask'])
-                known_mask_height = tampak_depan_data[track_id]
-
+            if passed_limits[track['track_id']]["right"] == True and passed_limits[track['track_id']]["left"] == False:
                 if current_mask_height and known_mask_height:
                     estimated_height = (current_mask_height / known_mask_height) * REFERENCE_HEIGHT_METERS
 
-                    if track_id not in height_records:
-                        height_records[track_id] = []
-                    height_records[track_id].append(estimated_height)
+                    if track['track_id'] not in height_records:
+                        height_records[track['track_id']] = []
+                    height_records[track['track_id']].append(estimated_height)
 
-                    estimated_heights[track_id] = estimated_height
-                    print(f"height_records {height_records}")
+                    estimated_heights[track['track_id']] = estimated_height
+                    #print(f"height_records {height_records}")
+                #print(f"passed limits {passed_limits}")
+            # Check if the object is within the desired horizontal range
+                if x_min <= left_limit:
+                    passed_limits[track['track_id']]["left"] = True
+                    if (passed_limits[track['track_id']]["left"] and passed_limits[track['track_id']]["right"]):
+                        final_heights = get_final_estimated_heights(height_records, final_heights)
+                        passed_limits[track['track_id']]["right"] = False
+                    continue
 
-    # Remove objects that have passed (outside the loop to avoid modifying the dictionary while iterating)
-    for track_id in to_remove:
-        object_tracking_status.pop(track_id, None)  # Remove safely
+    # Ensure function always returns values
+    return final_heights, height_records, passed_limits
 
-    # Capture frame if an object passed
-    if detected_track_ids:
-        #captured_frame = draw_mask_on_detected_tracks(frame, updated_tracks, detected_track_ids)
-        #cv2.imwrite(f"captured_object_passed.png", captured_frame)  # Save the frame
-        print("Frame captured and saved!")
 
-    return estimated_heights, height_records, object_tracking_status, is_append
+def get_final_estimated_heights(height_records, final_heights):
 
-def get_final_estimated_heights(height_records):
-    final_heights = {}
     for track_id, heights in height_records.items():
         if heights:
             final_heights[track_id] = np.mean(heights)

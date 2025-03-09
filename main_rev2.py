@@ -11,14 +11,14 @@ import asyncio
 import websockets
 from matching_and_tracking import process_tracks_and_extract_features, match_features, draw_tracking_info
 from id_merging import merge_track_ids
-from database import save_violation_to_mongodb, check_id_exists
+from database import save_violation_to_mongodb, check_id_exists, draw_mask_on_detected_tracks
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Tuple, Dict, List
 import base64
 from ultralytics import YOLO
 from dimension_estimation import  compute_reference_height, estimate_height, get_final_estimated_heights
 from collections import deque
-
+import traceback
 PORT_1 = 5010  # Port for first video stream
 PORT_2 = 5011  # Port for second video stream
 PORT_RESULT_1 = 5012
@@ -236,7 +236,8 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
     deepsort = DeepSort(max_age=10)
     tampak_depan_data = {}
     height_records = {}
-    object_tracking_status = {}
+    final_heights = {}
+    passed_limits = {}
     while True:
         try:
             #frame, frame_id = receive_video(sock_video, camera_name)
@@ -245,10 +246,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
             # Receive inference results
             #print("-2")
             #detections, masks = extract_detections(sock_result, frame_id)
-            
-            
-
-
             # Use 'yolov8n.pt' for a small model
             #print("-1")
             estimated_height = 2
@@ -273,7 +270,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                     xmin, ymin, xmax, ymax = box
                     width, height = xmax - xmin, ymax - ymin
 
-                    # Ambil mask dalam format masks.xy[index]
                     if masks:
                         seg = masks.xy[index] if index < len(masks.xy) else None
                     else:
@@ -287,16 +283,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                     
                     ))
 
-                    detections.append((
-                        [xmin, ymin, width, height],  # Bounding box
-                        confidences[index],  # Confidence score
-                        class_names[index],
-                        seg,
-                    ))                     #print(f"detections {detections}")
-                        #        detections2.append(([xmin, ymin, xmax - xmin, ymax - ymin], conf, class_name))
-                    #print(detections2)
-
-                    #print(f"detections {detections}")
             if detections:
                 #print("0000")
                 if camera_name == "Camera 1":
@@ -304,47 +290,58 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                         tracking_results, frame = process_tracks_and_extract_features(detections, frame)
                         tracked_objects1 = merge_track_ids(tracking_results)
                         reference_height = compute_reference_height(tracked_objects1, tampak_depan_data)
-                        estimated_height, height_records, object_tracking_status = estimate_height(tracked_objects1, reference_height, height_records, object_tracking_status)
-                        print(object_tracking_status)
-                        final_heights = get_final_estimated_heights(height_records)
+                        final_heights, height_records, passed_limits = estimate_height(tracked_objects1, reference_height, height_records, passed_limits, final_heights)
+                        for track in tracked_objects1:
+                            #print(f"passed_limits {passed_limits}")
+                            if track['track_id'] in passed_limits and passed_limits[track['track_id']]["left"] and track['track_id'] in final_heights:
+                                frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects1)
+                                passed_limits[track['track_id']]["left"] = False
+
+                                save_violation_to_mongodb(frame_captured, track['track_id'], final_heights[track['track_id']], "REF_12345")
+
+
+                        #print(object_tracking_status)
+                        #final_heights = get_final_estimated_heights(height_records)
                         #print("4")
                         #frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
                         #print("5")
                         #print(f"keypoints1 {keypoints1}")
                         # Store data in shared dictionary
-                        #shared_data["tracked_objects1"] = tracked_objects1
-                        #shared_data["keypoints1"] = keypoints_to_list(keypoints1)
-                        #shared_data["descriptors1"] = descriptors1
+                        for track in tracked_objects1:
+                            if track["class_name"] == "Tampak Depan":
+                                shared_data[f"tracked_objects1"] = {
+                                    "track_id": track["track_id"],
+                                    "class_name": track["class_name"],
+                                    "bounding_box": track["bounding box"],
+                                    "keypoints": keypoints_to_list(track["kp"]),
+                                    "descriptor": track["des"],
+                                    "mask": track["mask"]
+                                }
+                                #print(shared_data[f"tracked_objects1"])
 
 
-                        if all(k in shared_data for k in ["tracked_objects1", "keypoints1", "descriptors1", 
-                                                              "tracked_objects2", "keypoints2", "descriptors2"]):
-                                #print("masuk -2")   
-                                if shared_data["descriptors1"] is not None and shared_data["descriptors2"] is not None:
-                                    #print("masuk -1")
-                                    keypoints1 = list_to_keypoints(shared_data["keypoints1"])
-                                    keypoints2 = list_to_keypoints(shared_data["keypoints2"])                                 
+
+                        if all(k in shared_data for k in ["tracked_objects1", "tracked_objects2"]):
+                                #print("masuk -2")                                   
                                     #print("masuk 0")
-                                    good_matches, tracked_objects1 = match_features(
-                                        shared_data["descriptors1"], shared_data["descriptors2"],
-                                        shared_data["tracked_objects1"], shared_data["tracked_objects2"],
-                                        keypoints1, keypoints2)
+                                   good_matches, tracked_objects1 = match_features(shared_data["tracked_objects1"], shared_data["tracked_objects2"])
                                     #print("6")
                                     #print(f"id mapping {id_mapping}")
                                     #for track_id in id_mapping.values():  # or id_mapping.keys() depending on your structure
                                        #if not check_id_exists(track_id):
                                        #print(f"tracked object {tracked_objects1}")
                                       #save_violation_to_mongodb(track_id, frame, tracked_objects1)
-                        frame = draw_tracking_info(frame, tracked_objects1)
+                        #frame = draw_tracking_info(frame, tracked_objects1)
                                     #print("7")
                     except Exception as e:
                         print(f"Error matching features: {e}")
+                        traceback.print_exc()  # This prints the full traceback
                         continue
-
+                    
                 elif camera_name == "Camera 2":
                     try:
-                        tracks2, detections2, keypoints2, descriptors2 = process_tracks_and_extract_features(deepsort, detections, frame)
-                        tracked_objects2 = merge_track_ids(tracks2, detections2, frame)
+                        tracking_results2, frame = process_tracks_and_extract_features(detections, frame)
+                        #tracked_objects2 = merge_track_ids(tracks2, detections2, frame)
                         #print(f"tracked object 2 {tracked_objects2}")
                         #print("2.1")
                         #reference_height = compute_reference_height(tracked_objects2, detections, tampak_depan_data)
@@ -354,9 +351,17 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                         #frame = draw_tracking_info(frame, tracked_objects2, estimated_height, is_cam1=False)
                         #print("5.1")
                         #print(f"keypoints2 {keypoints2}")
-                        shared_data["tracked_objects2"] = tracked_objects2
-                        shared_data["keypoints2"] = keypoints_to_list(keypoints2)
-                        shared_data["descriptors2"] = descriptors2
+                        for track in tracking_results2:
+                            if track["class_name"] == "Tampak Depan":
+                                shared_data[f"tracked_objects2"] = {
+                                    "track_id": track["track_id"],
+                                    "class_name": track["class_name"],
+                                    "bounding_box": track["bounding box"],
+                                    "keypoints": keypoints_to_list(track["kp"]),
+                                    "descriptor": track["des"],
+                                    "mask": track["mask"]
+                                }
+                                #print(shared_data[f"tracked_objects2"])
                         #print("5.2")
                     
                     except Exception as e:
@@ -382,8 +387,10 @@ def start_process(video_port, result_port, camera_name, queue, video_path, share
 
 if __name__ == "__main__":
     video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0800.MOV"
+    video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0800.MOV"
+    
     #video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4"
-    video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4"
+    #video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4"
 
     try:
         manager = multiprocessing.Manager()
@@ -396,10 +403,10 @@ if __name__ == "__main__":
 
         #process_websocket.start()
         process1.start()
-        #process2.start()
+        process2.start()
 
         process1.join()
-        #process2.join()
+        process2.join()
         #process_websocket.join()
 
     except KeyboardInterrupt:
