@@ -3,6 +3,8 @@ import cv2
 from pymongo import MongoClient
 from gridfs import GridFS
 import numpy as np
+import pytesseract
+from ultralytics import YOLO
 
 # MongoDB setup
 client = MongoClient('mongodb://localhost:27017/')
@@ -10,7 +12,8 @@ db = client['traffic_violations']
 collection = db['violations']  # Main collection for metadata
 fs = GridFS(db)  # GridFS setup
 location = 'Jl. Pantura KM 23'
-reference_number = 'XX123456'
+
+model = YOLO("best.pt")
 
 def check_id_exists(track_id):
     """Check if a track_id already exists in MongoDB."""
@@ -76,47 +79,111 @@ def convert_tracked_objects_to_dict(tracked_objects):
     
     return tracked_dicts
 
-def save_violation_to_mongodb(frame, track_id, height, reference_number):
+def detect_license_plate(frame):
     """
-    Saves violation data to MongoDB, including an image with a mask drawn.
+    Mendeteksi plat nomor kendaraan dalam gambar menggunakan YOLOv8.
+    Parameters:
+        frame (numpy array): Frame gambar dari video.
+    Returns:
+        list: Daftar bounding box plat nomor [(x1, y1, x2, y2)].
+    """
+    results = model(frame)  # Prediksi YOLOv8
+    plates = []
 
+    for result in results:
+        for box in result.boxes.xyxy:
+            x1, y1, x2, y2 = map(int, box[:4])  # Ambil koordinat bounding box
+            plates.append((x1, y1, x2, y2))
+
+    return plates
+
+def extract_license_plate_text(frame, plates):
+    """
+    Mengekstrak teks dari plat nomor menggunakan Tesseract OCR.
+    Parameters:
+        frame (numpy array): Frame gambar dari video.
+        plates (list): Daftar bounding box plat nomor [(x1, y1, x2, y2)].
+    Returns:
+        str: Teks plat nomor yang diekstrak atau "Unrecognized" jika OCR gagal.
+    """
+    if not plates:
+        return "Unknown"  # Tidak ada plat nomor terdeteksi oleh YOLO
+
+    extracted_texts = []
+
+    for (x1, y1, x2, y2) in plates:
+        plate_img = frame[y1:y2, x1:x2]  # Crop area plat nomor
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        # Preprocessing untuk meningkatkan akurasi OCR
+        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Konfigurasi Tesseract OCR untuk membaca huruf kapital dan angka saja
+        custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        text = pytesseract.image_to_string(thresh, config=custom_config).strip()
+
+        # Jika OCR gagal mendeteksi karakter, set "Unrecognized"
+        if text == "":
+            text = "Unrecognized"
+
+        extracted_texts.append(text)
+
+    return extracted_texts[0] if extracted_texts else "Unrecognized"
+
+
+def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name):
+    """
+    Saves violation data to MongoDB, including an image with a mask drawn and license plate detection.
     Parameters:
         frame (numpy array): The processed video frame.
         track_id (int): Unique ID of the tracked object.
         height (float): Estimated object height.
-        reference_number (str): Reference number for the record.
+        is_multicam (bool): Indicates if multiple cameras are used.
+        camera_name (str): Name of the camera capturing the violation.
     """
     try:
-        if check_id_exists(track_id):
-            return #print(f"Violation for Track ID {track_id} already exists. Skipping save.")
+        timestamp = datetime.datetime.now()
+
+        # Deteksi plat nomor menggunakan YOLOv8
+        plates = detect_license_plate(frame)
+        license_plate = extract_license_plate_text(frame, plates)
 
         # Convert frame to binary format for storage
         _, buffer = cv2.imencode('.jpg', frame)
         image_binary = buffer.tobytes()
-
-        # Generate timestamp and image filename
-        timestamp = datetime.datetime.now()
         image_filename = f"{track_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
 
-        # Save the image in GridFS
+        # Simpan gambar di GridFS
         image_id = fs.put(image_binary, filename=image_filename, content_type="image/jpeg")
 
-        # Prepare violation data
-        violation_data = {
-            'timestamp': timestamp,
-            'location': 'Jl. Pantura KM 23',  # Fixed location
-            'Reference Number': reference_number,
-            'licensePlate': f"ID_{track_id}",
-            'camera': "Camera 1",
-            'violationImageId': image_id,  # Reference to the GridFS file ID
-            'length': float(height),
-            'width': float(1.8)
-        }
+        if is_multicam and check_id_exists(track_id) and camera_name == "Camera 1":
+            collection.update_one(
+                {"track_id": track_id},
+                {"$push": {
+                    "additional_cameras": {
+                        "camera": camera_name,
+                        "violationImageId": image_id,
+                        "height": float(height)
+                    }
+                }}
+            )
+            is_multicam = False
+        else:
+            violation_data = {
+                'timestamp': timestamp,
+                'location': 'Jl. Pantura KM 23',
+                'track_id': track_id,
+                'license_plate': license_plate,  
+                'camera': camera_name,
+                'violationImageId': image_id,
+                'height': float(height),
+            }
 
-        # Insert the violation record into the MongoDB collection
-        collection.insert_one(violation_data)
+            if is_multicam and camera_name != "Camera 1":
+                violation_data['additional_cameras'] = []
 
-        print(f"Violation saved for Track ID {track_id} with Image ID {image_id}")
+            collection.insert_one(violation_data)
+            print(f"Violation saved for Track ID {track_id} with License Plate: {license_plate}")
 
     except Exception as e:
         print(f"Error saving violation for Track ID {track_id}: {e}")

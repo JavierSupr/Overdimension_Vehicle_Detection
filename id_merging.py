@@ -46,5 +46,4 @@ def merge_track_ids(tracking_results):
             'mask': track['mask']
         })
 
-    
     return updated_tracks

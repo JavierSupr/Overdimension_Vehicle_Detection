@@ -1,12 +1,6 @@
 import cv2
 import numpy as np
-import random
-from deep_sort_realtime.deepsort_tracker import DeepSort
 import traceback
-
-deepsort = DeepSort(max_age=30)  # Inisialisasi DeepSORT
-
-sift = cv2.SIFT_create()
 
 def list_to_keypoints(kp_list):
     """Convert a list of tuples back into cv2.KeyPoint objects and print them."""
@@ -204,7 +198,7 @@ def match_features(tracked_objects1, tracked_objects2, frame):
 
 
 
-def extract_sift_features(track, gray_frame):
+def extract_sift_features(sift, track, gray_frame):
     """
     Extracts SIFT features from the bounding box of the given track in the grayscale frame.
 
@@ -230,7 +224,6 @@ def extract_sift_features(track, gray_frame):
         return [], None  # Return empty if ROI is invalid
 
     # Initialize SIFT
-    sift = cv2.SIFT_create()
 
     # Detect and compute keypoints & descriptors
     keypoints, descriptors = sift.detectAndCompute(roi, None)
@@ -241,7 +234,7 @@ def extract_sift_features(track, gray_frame):
 
     return keypoints, descriptors
 
-def process_tracks_and_extract_features(detections, frame, is_cam1=True):
+def process_tracks_and_extract_features(deepsort, sift, detections, frame, is_cam1=True):
     
     detections2 = [det[:3] for det in detections]
     tracks = deepsort.update_tracks(detections2, frame=frame)
@@ -280,7 +273,7 @@ def process_tracks_and_extract_features(detections, frame, is_cam1=True):
 
             if class_id == "Tampak Depan":
                 # Extract SIFT features for 'Tampak Depan'
-                kp, des = extract_sift_features(track, gray_frame)
+                kp, des = extract_sift_features(sift, track, gray_frame)
                 if kp:
                     keypoints_result.extend(kp)
                 if des is not None:

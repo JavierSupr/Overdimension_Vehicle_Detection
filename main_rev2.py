@@ -29,6 +29,10 @@ UDP_IP = "0.0.0.0"
 WEBSOCKET_URL = "ws://localhost:8765"
 WEBSOCKET_PORT = 8765
 
+deepsort = DeepSort(max_age=30)  # Inisialisasi DeepSORT
+sift = cv2.SIFT_create()
+
+
 detections_buffer = {}
 
 async def websocket_sender(queue):
@@ -255,6 +259,8 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
     height_records2 = {}
     final_heights2 = {}
     passed_limits2 = {}
+
+    is_multicam = False
     while True:
         try:
             #frame, frame_id = receive_video(sock_video, camera_name)
@@ -304,21 +310,10 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                 #print("0000")
                 if camera_name == "Camera 1":
                     try:
-                        tracking_results1, frame = process_tracks_and_extract_features(detections, frame)
+                        tracking_results1, frame = process_tracks_and_extract_features(deepsort, sift, detections, frame)
                         tracked_objects1 = merge_track_ids(tracking_results1)
                         reference_height1 = compute_reference_height(tracked_objects1, tampak_depan_data1)
                         final_heights1, height_records1, passed_limits1 = estimate_height(tracked_objects1, reference_height1, height_records1, passed_limits1, final_heights1)
-                        for track in tracked_objects1:
-                            #print(f"passed_limits {passed_limits}")
-                            if track['kp']:
-                                frame = draw_keypoints(frame, track['kp'] )
-
-                            if track['track_id'] in passed_limits1 and passed_limits1[track['track_id']]["left"] and track['track_id'] in final_heights1:
-                                frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects1)
-                                passed_limits1[track['track_id']]["left"] = False
-
-                                save_violation_to_mongodb(frame_captured, track['track_id'], final_heights1[track['track_id']], "REF_12345")
-
 
                         #print(object_tracking_status)
                         #final_heights = get_final_estimated_heights(height_records)
@@ -357,9 +352,17 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                     for entry in tracked_objects1:
                                         if entry["track_id"] in reverse_mapping:
                                             entry["track_id"] = reverse_mapping[entry["track_id"]]
-                                   
+                                            is_multicam = True
+
+                        for track in tracked_objects1:
+                            print(f"is_multicam {is_multicam}")
+
+                            if track['track_id'] in passed_limits1 and passed_limits1[track['track_id']]["left"] and track['track_id'] in final_heights1:
+                                frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects1)
+                                passed_limits1[track['track_id']]["left"] = False
+                                save_violation_to_mongodb(frame_captured, track['track_id'], final_heights1[track['track_id']], is_multicam, camera_name)
                         frame = draw_tracking_info(frame, tracked_objects1)
-                                    #print("7")
+                    
                     except Exception as e:
                         print(f"Error matching features: {e}")
                         traceback.print_exc()  # This prints the full traceback
@@ -367,7 +370,8 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                     
                 elif camera_name == "Camera 2":
                     try:
-                        tracking_results2, frame = process_tracks_and_extract_features(detections, frame, is_cam1=False)
+                        tracking_results2, frame = process_tracks_and_extract_features(deepsort, sift, detections, frame, is_cam1=False)
+                        #print(tracking_results2)
                         tracked_objects2 = merge_track_ids(tracking_results2)
                         reference_height2 = compute_reference_height(tracked_objects2, tampak_depan_data2)
                         final_heights2, height_records2, passed_limits2 = estimate_height(tracked_objects2, reference_height2, height_records2, passed_limits2, final_heights2)
@@ -377,11 +381,11 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                 frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects2)
                                 passed_limits2[track['track_id']]["left"] = False
 
-                                save_violation_to_mongodb(frame_captured, track['track_id'], final_heights2[track['track_id']], "REF_12345")
+                                save_violation_to_mongodb(frame_captured, track['track_id'], final_heights2[track['track_id']], is_multicam, camera_name)
 
-                        frame = draw_tracking_info(frame, tracking_results2, is_cam1=False)
+                        frame = draw_tracking_info(frame, tracked_objects2, is_cam1=False)
 
-                        for track in tracking_results2:
+                        for track in tracked_objects2:
                             if track["class_name"] == "Tampak Depan":
                                 shared_data[f"tracked_objects2"] = {
                                     "track_id": track["track_id"],
