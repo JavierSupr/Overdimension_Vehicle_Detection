@@ -95,7 +95,7 @@ def update_id_mappings(tracked_objects1, tracked_objects2, good_matches, id_mapp
             if updated_tracked_objects1["track_id"] == id1:
                # print("masuk3")
                 new_id = id2  # Assign Camera 2 ID
-                print(f"Updated Camera 1 ID {id1} to Camera 2 ID {new_id}")
+                #print(f"Updated Camera 1 ID {id1} to Camera 2 ID {new_id}")
                 break
 
         updated_tracked_objects1["track_id"] = new_id  # Update ID
@@ -187,7 +187,7 @@ def match_features(tracked_objects1, tracked_objects2, frame):
             #print("masuk7")
             updated_tracked_objects1, kp1_pts, id_mapping = update_id_mappings(tracked_objects1, tracked_objects2, good_matches, id_mapping)
             #frame = draw_keypoints(frame, kp1_pts, (0, 255, 0))
-            print(f"id mapping {id_mapping}")
+            #print(f"id mapping {id_mapping}")
         except Exception as e:
             print(f"Error in feature matching: {e}")
             traceback.print_exc() 

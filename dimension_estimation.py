@@ -79,7 +79,7 @@ def estimate_height(tracking_results, tampak_depan_data, height_records, passed_
             x_min, y_min, x_max, y_max = track['bounding box']  # Extract bounding box coordinates
 
             if track['track_id'] not in passed_limits:
-                passed_limits[track['track_id']] = {"left": False, "right": False}
+                passed_limits[track['track_id']] = {"left": None, "right": False}
 
             # Check if object has crossed left limit
             #if x_min <= left_limit:
@@ -95,7 +95,7 @@ def estimate_height(tracking_results, tampak_depan_data, height_records, passed_
             current_mask_height = compute_height_from_mask(track['mask'])
             known_mask_height = tampak_depan_data[track['track_id']]
 
-            if passed_limits[track['track_id']]["right"] == True and passed_limits[track['track_id']]["left"] == False:
+            if passed_limits[track['track_id']]["right"] == True and passed_limits[track['track_id']]["left"] == None:
                 if current_mask_height and known_mask_height:
                     estimated_height = (current_mask_height / known_mask_height) * REFERENCE_HEIGHT_METERS
 

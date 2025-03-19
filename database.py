@@ -15,9 +15,14 @@ location = 'Jl. Pantura KM 23'
 
 model = YOLO("best.pt")
 
-def check_id_exists(track_id):
-    """Check if a track_id already exists in MongoDB."""
-    return collection.find_one({'licensePlate': f"ID_{track_id}"}) is not None
+def check_id_exists(track_id, camera_name=None):
+    """Check if a track_id already exists in MongoDB and optionally check for a specific camera name."""
+    query = {'track_id': track_id}
+    
+    if camera_name:
+        query['camera'] = camera_name  # Ensure the main camera field matches
+    
+    return collection.find_one(query)
 
 def draw_mask_on_detected_tracks(frame, tracked_objects):
     """
@@ -145,8 +150,9 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
         timestamp = datetime.datetime.now()
 
         # Deteksi plat nomor menggunakan YOLOv8
-        plates = detect_license_plate(frame)
-        license_plate = extract_license_plate_text(frame, plates)
+        #plates = detect_license_plate(frame)
+        #license_plate = extract_license_plate_text(frame, plates)
+        license_plate = 'B 1234 RF'
 
         # Convert frame to binary format for storage
         _, buffer = cv2.imencode('.jpg', frame)
@@ -155,8 +161,13 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
 
         # Simpan gambar di GridFS
         image_id = fs.put(image_binary, filename=image_filename, content_type="image/jpeg")
-
-        if is_multicam and check_id_exists(track_id) and camera_name == "Camera 1":
+        print(f"check_id_exists {track_id}  {check_id_exists(track_id)}")
+        
+        #if is_multicam and camera_name == "Camera 1":
+        #    violation_data['additional_cameras'] = []  # Initialize empty list for additional cameras
+        print(f"is multicam {is_multicam} -- {check_id_exists(track_id, 'Camera 2')} -- {camera_name} ")
+        if is_multicam and check_id_exists(track_id, "Camera 2") is not None and camera_name == "Camera 1":
+            print("masuk")
             collection.update_one(
                 {"track_id": track_id},
                 {"$push": {
@@ -168,7 +179,7 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
                 }}
             )
             is_multicam = False
-        else:
+        elif check_id_exists(track_id) is None:
             violation_data = {
                 'timestamp': timestamp,
                 'location': 'Jl. Pantura KM 23',
@@ -178,9 +189,7 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
                 'violationImageId': image_id,
                 'height': float(height),
             }
-
-            if is_multicam and camera_name != "Camera 1":
-                violation_data['additional_cameras'] = []
+        
 
             collection.insert_one(violation_data)
             print(f"Violation saved for Track ID {track_id} with License Plate: {license_plate}")

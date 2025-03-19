@@ -175,58 +175,8 @@ def list_to_keypoints(kp_list):
             keypoints.append(keypoint)
         else:
             print(f"Invalid keypoint format {kp} (Expected 7 elements)")
-    
-    # Print keypoints
-    #for i, kp in enumerate(keypoints):
-        #print(f"Keypoint {i}: (x={kp.pt[0]}, y={kp.pt[1]}, size={kp.size}, angle={kp.angle}, response={kp.response}, octave={kp.octave}, class_id={kp.class_id})")
-    
+   
     return keypoints
-CLASS_COLORS = {
-    "Truk": (0, 0, 255),         # Red
-    "Tampak Depan": (255, 0, 0), # Blue
-    "Tampak Samping": (0, 255, 0) # Green
-}
-
-def display_video_with_masks(frame, updated_tracks):
-        """
-        Display the video with overlayed segmentation masks from the updated_tracks list.
-
-        Args:
-            video_path (str): Path to the input video.
-            updated_tracks (list): List of tuples (track, class_name, track_id, mask).
-        """
-
-        for track, class_name, track_id, mask in updated_tracks:
-            color = CLASS_COLORS.get(class_name, (255, 255, 255))  # Default white if class not found
-            
-            if mask is not None:
-                mask_image = np.zeros_like(frame[:, :, 0], dtype=np.uint8)  # Create blank mask
-
-                # Ensure mask is in the correct format for OpenCV
-                if isinstance(mask, list) and isinstance(mask[0], (list, np.ndarray)):  
-                    # If mask is a list of multiple polygon segments
-                    for segment in mask:
-                        segment_np = np.array(segment, dtype=np.int32)
-                        if len(segment_np.shape) == 2 and segment_np.shape[1] == 2:  # Ensure valid shape
-                            cv2.fillPoly(mask_image, [segment_np], 255)
-                elif isinstance(mask, np.ndarray) and len(mask.shape) == 2:
-                    # If mask is already a binary image
-                    mask_image = mask.astype(np.uint8) * 255
-
-                # Overlay mask with transparency using the class color
-                mask_colored = np.zeros_like(frame, dtype=np.uint8)
-                mask_colored[mask_image > 0] = color  # Apply the class-specific color
-                frame = cv2.addWeighted(mask_colored, 0.5, frame, 0.5, 0)
-
-            # Draw track information
-            bbox = track.to_tlbr()  # Get bounding box [xmin, ymin, xmax, ymax]
-            x1, y1, x2, y2 = map(int, bbox)
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)  # Bounding box in class color
-            cv2.putText(frame, f"{class_name} ID:{track_id}", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)       #if cv2.waitKey(30) & 0xFF == ord('q'):  # Press 'q' to exit
-        
-        return frame
 
 def draw_keypoints(frame, keypoints, color=(0, 255, 0)):
     """
@@ -307,7 +257,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                     ))
 
             if detections:
-                #print("0000")
                 if camera_name == "Camera 1":
                     try:
                         tracking_results1, frame = process_tracks_and_extract_features(deepsort, sift, detections, frame)
@@ -315,13 +264,6 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                         reference_height1 = compute_reference_height(tracked_objects1, tampak_depan_data1)
                         final_heights1, height_records1, passed_limits1 = estimate_height(tracked_objects1, reference_height1, height_records1, passed_limits1, final_heights1)
 
-                        #print(object_tracking_status)
-                        #final_heights = get_final_estimated_heights(height_records)
-                        #print("4")
-                        #frame = draw_tracking_info(frame, tracked_objects1, estimated_height)
-                        #print("5")
-                        #print(f"keypoints1 {keypoints1}")
-                        # Store data in shared dictionary
                         for track in tracked_objects1:
                             if track["class_name"] == "Tampak Depan":
                                 shared_data[f"tracked_objects1"] = {
@@ -332,22 +274,11 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                     "descriptor": track["des"],
                                     "mask": track["mask"]
                                 }
-                                #print(shared_data[f"tracked_objects1"])
-
-
 
                         if all(k in shared_data for k in ["tracked_objects1", "tracked_objects2"]):
-                                #print("masuk -2")                                   
-                                    #print("masuk 0")
+
                                     good_matches, updated_tracked_objects1, id_mapping = match_features(shared_data["tracked_objects1"], shared_data["tracked_objects2"], frame)
-                                    #print("6")
-                                    #print(f"id mapping {id_mapping}")
-                                    #for track_id in id_mapping.values():  # or id_mapping.keys() depending on your structure
-                                       #if not check_id_exists(track_id):
-                                       #print(f"tracked object {tracked_objects1}")
-                                      #save_violation_to_mongodb(track_id, frame, tracked_objects1)
                                     reverse_mapping = {v: k for k, v in id_mapping.items()}
-                                    #print(tracked_objects1)
 
                                     for entry in tracked_objects1:
                                         if entry["track_id"] in reverse_mapping:
@@ -355,7 +286,7 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                             is_multicam = True
 
                         for track in tracked_objects1:
-                            print(f"is_multicam {is_multicam}")
+                            #print(f"is_multicam {is_multicam}")
 
                             if track['track_id'] in passed_limits1 and passed_limits1[track['track_id']]["left"] and track['track_id'] in final_heights1:
                                 frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects1)
@@ -419,6 +350,8 @@ def start_process(video_port, result_port, camera_name, queue, video_path, share
 if __name__ == "__main__":
     video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0800.MOV"
     video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/Video2/MVI_0800.MOV"
+    #video_path1 = "Camera 1.mp4"
+    #video_path2 = "Camera 2.mp4"
     
     #video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4"
     #video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4"
