@@ -279,16 +279,28 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
 
                                     good_matches, updated_tracked_objects1, id_mapping = match_features(shared_data["tracked_objects1"], shared_data["tracked_objects2"], frame)
                                     reverse_mapping = {v: k for k, v in id_mapping.items()}
-
                                     for entry in tracked_objects1:
                                         if entry["track_id"] in reverse_mapping:
-                                            entry["track_id"] = reverse_mapping[entry["track_id"]]
+                                            new_id = reverse_mapping[entry["track_id"]]
+                                            old_id = entry["track_id"]
+
+                                            # Update the track_id
+                                            entry["track_id"] = new_id
                                             is_multicam = True
+
+                                            # Also update the ID inside passed_limits1 if it exists
+                                            if old_id in passed_limits1:
+                                                passed_limits1[new_id] = passed_limits1.pop(old_id)
+                                            if old_id in final_heights1:
+                                                final_heights1[new_id] = final_heights1.pop(old_id)
 
                         for track in tracked_objects1:
                             #print(f"is_multicam {is_multicam}")
+                            print(f"passed limits {track['track_id']} ---- {passed_limits1}")
+                            print(f"final height {final_heights1}")
 
                             if track['track_id'] in passed_limits1 and passed_limits1[track['track_id']]["left"] and track['track_id'] in final_heights1:
+                                print("masuk")
                                 frame_captured = draw_mask_on_detected_tracks(frame, tracked_objects1)
                                 passed_limits1[track['track_id']]["left"] = False
                                 save_violation_to_mongodb(frame_captured, track['track_id'], final_heights1[track['track_id']], is_multicam, camera_name)
@@ -332,6 +344,12 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                         continue
             if not queue.full():
                 queue.put((camera_name, frame))
+            height, width = frame.shape[:2]
+            line_x1 = int((4 / 9) * width)  # x-coordinate at 2/5 of frame width
+            line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
+            # Draw the vertical blue line
+            cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
+            cv2.line(frame, (line_x2, 0), (line_x2, height), (255, 0, 0), 2)  # Blue color (BGR)
 
             cv2.imshow(camera_name, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):

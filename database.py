@@ -5,6 +5,7 @@ from gridfs import GridFS
 import numpy as np
 import pytesseract
 from ultralytics import YOLO
+from ocr_license_plate import detect_license_plate, extract_license_plate_text
 
 # MongoDB setup
 client = MongoClient('mongodb://localhost:27017/')
@@ -84,58 +85,6 @@ def convert_tracked_objects_to_dict(tracked_objects):
     
     return tracked_dicts
 
-def detect_license_plate(frame):
-    """
-    Mendeteksi plat nomor kendaraan dalam gambar menggunakan YOLOv8.
-    Parameters:
-        frame (numpy array): Frame gambar dari video.
-    Returns:
-        list: Daftar bounding box plat nomor [(x1, y1, x2, y2)].
-    """
-    results = model(frame)  # Prediksi YOLOv8
-    plates = []
-
-    for result in results:
-        for box in result.boxes.xyxy:
-            x1, y1, x2, y2 = map(int, box[:4])  # Ambil koordinat bounding box
-            plates.append((x1, y1, x2, y2))
-
-    return plates
-
-def extract_license_plate_text(frame, plates):
-    """
-    Mengekstrak teks dari plat nomor menggunakan Tesseract OCR.
-    Parameters:
-        frame (numpy array): Frame gambar dari video.
-        plates (list): Daftar bounding box plat nomor [(x1, y1, x2, y2)].
-    Returns:
-        str: Teks plat nomor yang diekstrak atau "Unrecognized" jika OCR gagal.
-    """
-    if not plates:
-        return "Unknown"  # Tidak ada plat nomor terdeteksi oleh YOLO
-
-    extracted_texts = []
-
-    for (x1, y1, x2, y2) in plates:
-        plate_img = frame[y1:y2, x1:x2]  # Crop area plat nomor
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        # Preprocessing untuk meningkatkan akurasi OCR
-        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Konfigurasi Tesseract OCR untuk membaca huruf kapital dan angka saja
-        custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        text = pytesseract.image_to_string(thresh, config=custom_config).strip()
-
-        # Jika OCR gagal mendeteksi karakter, set "Unrecognized"
-        if text == "":
-            text = "Unrecognized"
-
-        extracted_texts.append(text)
-
-    return extracted_texts[0] if extracted_texts else "Unrecognized"
-
-
 def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name):
     """
     Saves violation data to MongoDB, including an image with a mask drawn and license plate detection.
@@ -150,9 +99,9 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
         timestamp = datetime.datetime.now()
 
         # Deteksi plat nomor menggunakan YOLOv8
-        #plates = detect_license_plate(frame)
-        #license_plate = extract_license_plate_text(frame, plates)
-        license_plate = 'B 1234 RF'
+        plates = detect_license_plate(frame)
+        license_plate = extract_license_plate_text(frame, plates)
+        #license_plate = 'B 1234 RF'
 
         # Convert frame to binary format for storage
         _, buffer = cv2.imencode('.jpg', frame)
@@ -161,25 +110,68 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
 
         # Simpan gambar di GridFS
         image_id = fs.put(image_binary, filename=image_filename, content_type="image/jpeg")
-        print(f"check_id_exists {track_id}  {check_id_exists(track_id)}")
-        
         #if is_multicam and camera_name == "Camera 1":
         #    violation_data['additional_cameras'] = []  # Initialize empty list for additional cameras
-        print(f"is multicam {is_multicam} -- {check_id_exists(track_id, 'Camera 2')} -- {camera_name} ")
-        if is_multicam and check_id_exists(track_id, "Camera 2") is not None and camera_name == "Camera 1":
-            print("masuk")
-            collection.update_one(
-                {"track_id": track_id},
-                {"$push": {
-                    "additional_cameras": {
-                        "camera": camera_name,
-                        "violationImageId": image_id,
-                        "height": float(height)
-                    }
-                }}
-            )
-            is_multicam = False
-        elif check_id_exists(track_id) is None:
+        existing_data = check_id_exists(track_id)
+
+        if is_multicam:
+            if existing_data is not None:
+                # There is already a main entry for this track_id
+                if camera_name == "Camera 1":
+                    # Check if there's already a document with this track_id
+                    existing_doc = collection.find_one({"track_id": track_id})
+
+                    # Proceed only if the current camera_name is different from the main camera in the existing document
+                    if existing_doc and existing_doc.get("camera") != camera_name:
+                        # Also check if this camera is already in additional_cameras to avoid duplicates
+                        existing_camera1 = collection.find_one({
+                            "track_id": track_id,
+                            "additional_cameras.track_id": track_id
+                        })
+
+                        if not existing_camera1:
+                            print("Camera 1 masuk sebagai additional")
+                            collection.update_one(
+                                {"track_id": track_id},
+                                {"$push": {
+                                    "additional_cameras": {
+                                        "track_id": track_id,
+                                        "camera": camera_name,
+                                        "violationImageId": image_id,
+                                        "height": float(height)
+                                    }
+                                }}
+                            )
+                        is_multicam = False
+                elif camera_name == "Camera 2":
+                    # Check if there's already a document with this track_id
+                    existing_doc = collection.find_one({"track_id": track_id})
+
+                    # Proceed only if the current camera_name is different from the main camera in the existing document
+                    if existing_doc and existing_doc.get("camera") != camera_name:
+                        # Also check if this camera is already in additional_cameras to avoid duplicates
+                        existing_camera2 = collection.find_one({
+                            "track_id": track_id,
+                            "additional_cameras.track_id": track_id
+                        })
+
+                        if not existing_camera2:
+                            print("Camera 2 masuk sebagai additional")
+                            collection.update_one(
+                                {"track_id": track_id},
+                                {"$push": {
+                                    "additional_cameras": {
+                                        "track_id": track_id,
+                                        "camera": camera_name,
+                                        "violationImageId": image_id,
+                                        "height": float(height)
+                                    }
+                                }}
+                            )
+                        is_multicam = False
+        else:
+            # No entry yet: Camera 1 or 2 will be inserted as the main data
+            print(f"{camera_name} masuk sebagai main data")
             violation_data = {
                 'timestamp': timestamp,
                 'location': 'Jl. Pantura KM 23',
@@ -188,9 +180,8 @@ def save_violation_to_mongodb(frame, track_id, height, is_multicam, camera_name)
                 'camera': camera_name,
                 'violationImageId': image_id,
                 'height': float(height),
+                'additional_cameras': []
             }
-        
-
             collection.insert_one(violation_data)
             print(f"Violation saved for Track ID {track_id} with License Plate: {license_plate}")
 

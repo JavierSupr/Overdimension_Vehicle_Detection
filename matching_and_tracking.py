@@ -321,7 +321,13 @@ def process_tracks_and_extract_features(deepsort, sift, detections, frame, is_ca
 
 def draw_tracking_info(frame, tracking_results, is_cam1=True):   
     """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights, and overlays masks."""
-    
+
+    height, width = frame.shape[:2]
+    line_x1 = int((4 / 9) * width)  # x-coordinate at 2/5 of frame width
+    line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
+    # Draw the vertical blue line
+    cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
+    cv2.line(frame, (line_x2, 0), (line_x2, height), (255, 0, 0), 2)  # Blue color (BGR)
     for track in tracking_results:
         track_id = track['track_id']
         x1, y1, x2, y2 = map(int, track['bounding box'])

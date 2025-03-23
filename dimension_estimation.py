@@ -71,7 +71,7 @@ def is_within_range(mask, frame_width):
 
 def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
     estimated_heights = {}
-    left_limit = frame_width * (6/8)   # 1/4 of the screen width (exit point)
+    left_limit = frame_width * (4/9)   # 1/4 of the screen width (exit point)
     right_limit = frame_width * (7/8) 
 
     for track in tracking_results:
