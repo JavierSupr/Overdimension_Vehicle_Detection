@@ -48,30 +48,9 @@ def compute_height_from_mask(mask_xy):
     height = max(y_coords) - min(y_coords)
     return height
 
-
-
-
-def is_within_range(mask, frame_width):
-    """
-    Check if the object's mask is within the specified range (1/4 to 3/4 of frame width).
-    """
-    if mask is None or len(mask) == 0:
-        return False
-    
-    mask = np.array(mask)  # Ensure mask is a numpy array
-    x_coords = np.where(mask > 0)[1]  # Extract X-axis values
-    if len(x_coords) == 0:
-        return False
-    
-    min_x, max_x = min(x_coords), max(x_coords)
-    left_bound = frame_width / 4
-    right_bound = 3 * frame_width / 4
-    
-    return min_x >= left_bound and max_x <= right_bound
-
 def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
     estimated_heights = {}
-    left_limit = frame_width * (4/9)   # 1/4 of the screen width (exit point)
+    left_limit = frame_width * (1/2)   # 1/4 of the screen width (exit point)
     right_limit = frame_width * (7/8) 
 
     for track in tracking_results:
@@ -113,7 +92,7 @@ def estimate_height(tracking_results, tampak_depan_data, height_records, passed_
                         final_heights = get_final_estimated_heights(height_records, final_heights)
                         passed_limits[track['track_id']]["right"] = False
                     continue
-
+                
     # Ensure function always returns values
     return final_heights, height_records, passed_limits
 

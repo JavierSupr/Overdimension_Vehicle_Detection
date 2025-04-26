@@ -25,7 +25,7 @@ def merge_track_ids(tracking_results):
     """Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with 'Truk'."""
     truck_tracks = []
     for track in tracking_results:
-        if track['class_name'] == "Truk":
+        if track['class_name'] in ["Truk Besar", "Truk Kecil"]:
             truck_tracks.append((track['track_id'], track['bounding box']))
     
     updated_tracks = []

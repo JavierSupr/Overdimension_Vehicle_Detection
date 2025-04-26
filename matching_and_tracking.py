@@ -183,6 +183,7 @@ def match_features(tracked_objects1, tracked_objects2, frame):
                     m, n = match_pair
                     if m.distance < 0.75 * n.distance:
                         good_matches.append(m)
+                        #print(f"good matches {len(good_matches)}- {good_matches}")
             #print(f"(good_matches) {good_matches}")
             #print("masuk7")
             updated_tracked_objects1, kp1_pts, id_mapping = update_id_mappings(tracked_objects1, tracked_objects2, good_matches, id_mapping)
@@ -323,7 +324,7 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
     """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights, and overlays masks."""
 
     height, width = frame.shape[:2]
-    line_x1 = int((4 / 9) * width)  # x-coordinate at 2/5 of frame width
+    line_x1 = int((1 / 2) * width)  # x-coordinate at 2/5 of frame width
     line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
     # Draw the vertical blue line
     cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
@@ -350,10 +351,11 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
         cv2.putText(frame, label, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Overlay mask if available
-        if mask is not None and mask.size > 0:
-            mask = mask.reshape((-1, 1, 2)).astype(np.int32)  # Reshape mask to contour format
+        if mask is not None and len(mask) > 0:
+            mask = np.array(mask, dtype=np.int32)  # Convert list to np.array
+            mask = mask.reshape((-1, 1, 2))         # Bentuk ke format kontur OpenCV
+            
             overlay = frame.copy()
-            cv2.fillPoly(overlay, [mask], color)
-            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend mask with the frame
-    
+            cv2.fillPoly(overlay, [mask], color)    # Warnai polygon di overlay
+            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend overlay ke frame
     return frame
