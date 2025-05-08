@@ -1,10 +1,10 @@
-import pytesseract
 import cv2
 from ultralytics import YOLO
+import easyocr
 
 model = YOLO("license_number.pt")
 
-import cv2
+reader = easyocr.Reader(['en'])  
 
 def detect_license_plate(frame, truck_bbox, save_path="detected_plate.jpg"):
     """
@@ -48,38 +48,36 @@ def detect_license_plate(frame, truck_bbox, save_path="detected_plate.jpg"):
 
 def extract_license_plate_text(frame, plates):
     """
-    Mengekstrak teks dari plat nomor menggunakan Tesseract OCR.
+    Mengekstrak teks dari plat nomor menggunakan EasyOCR.
+
     Parameters:
         frame (numpy array): Frame gambar dari video.
         plates (list): Daftar bounding box plat nomor [(x1, y1, x2, y2)].
+
     Returns:
         tuple: (str, numpy array) -> Teks plat nomor dan citra plat yang diperbesar
     """
     if not plates:
-        return "Unknown", None  # Tidak ada plat nomor terdeteksi oleh YOLO
+        return "Unknown", None
 
     extracted_texts = []
     enlarged_images = []
 
     for (x1, y1, x2, y2) in plates:
+        x1 -= 20
+        x2 += 20
+        y1 -= 20
+        y2 += 20
         plate_img = frame[y1:y2, x1:x2]  # Crop area plat nomor
 
         # Perbesar ukuran image 2x
-        enlarged_img = cv2.resize(plate_img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        #enlarged_img = cv2.resize(plate_img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        # Preprocessing
-        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Gunakan easyocr untuk membaca teks
+        results = reader.readtext(plate_img, detail=0, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
 
-        # Konfigurasi OCR
-        custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        text = pytesseract.image_to_string(thresh, config=custom_config).strip()
-
-        if text == "":
-            text = "Unrecognized"
-
+        text = results[0].strip() if results else "Unrecognized"
         extracted_texts.append(text)
-        enlarged_images.append(enlarged_img)
+        enlarged_images.append(plate_img)
 
     return extracted_texts[0], enlarged_images[0]

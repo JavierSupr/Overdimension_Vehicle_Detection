@@ -1,4 +1,5 @@
 import numpy as np
+from collections import defaultdict
 
 REFERENCE_HEIGHT_METERS = 2.2 
 height_records = {}
@@ -10,6 +11,7 @@ def compute_reference_height(tracking_results, tampak_depan_data):
     """    
     for track in tracking_results:
         if track['class_name'] == "Tampak Depan":
+            #print(f"tampak depan id {track['track_id']}")
             height_from_mask = compute_height_from_mask(track['mask'])
             if height_from_mask:
                 tampak_depan_data[track['track_id']] = height_from_mask
@@ -22,31 +24,42 @@ def compute_reference_height(tracking_results, tampak_depan_data):
         return None  
     y_coords = [point[1] for point in mask]  
     return max(y_coords) - min(y_coords)
-def compute_height_from_mask(mask_xy):
-    """
-    Compute the height of an object from a mask contour.
 
+def compute_height_from_mask(mask_xy, rounding=1.0):
+    """
+    Compute the maximum vertical height (ymax - ymin) for vertical lines at same/similar x positions.
+    
     Args:
         mask_xy: A list of (x, y) coordinates representing the object contour.
+        rounding: The step size to round x values (e.g., 1.0 or 0.5) for grouping similar x values.
 
     Returns:
-        height: The computed height in pixels.
+        max_height: The maximum vertical height found for any x group.
     """
     if mask_xy is None or len(mask_xy) == 0:
-        return None  # No valid mask
+        return None
 
-    mask_xy = np.array(mask_xy)  # Ensure it's a numpy array
+    mask_xy = np.array(mask_xy)
+    grouped_y = defaultdict(list)
 
-    # Get only y-coordinates from the contour
-    y_coords = mask_xy[:, 1]  # Extract Y-axis values
-    #print(f"y_coords{y_coords}")
+    # Group y-values by rounded x-values
+    #print(f"mask xy {mask_xy}")
+    for x, y in mask_xy:
+        x_rounded = round(x / rounding) * rounding
+        grouped_y[x_rounded].append(y)
 
-    if len(y_coords) == 0:
-        return None  # No object detected in mask
+    # Compute height for each x group
+    max_height = 0
+    #print(f" nilai y {grouped_y.values()}")
+    for y_list in grouped_y.values():
+        if len(y_list) >= 2:
+            height = max(y_list) - min(y_list)
+            #print(f" {max(y_list)} - {min(y_list)} = {height}")
+            if height > max_height:
+                max_height = height
+    #print()
 
-    # Compute height as the difference between max and min y-coordinates
-    height = max(y_coords) - min(y_coords)
-    return height
+    return max_height
 
 def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
     estimated_heights = {}

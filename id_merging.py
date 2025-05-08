@@ -1,49 +1,69 @@
-
 def iou(box1, box2):
-    """Menghitung Intersection over Union (IoU) antara dua bounding box dengan format (x, y, w, h)."""
-    x1, y1, w1, h1 = box1  # Detection Box (x, y, w, h)
-    x2, y2, w2, h2 = box2  # Track Box (x, y, w, h)
-    
+    """
+    Mengembalikan True jika box1 setidaknya 80% berada di dalam box2.
+    Box dalam format (x, y, w, h).
+    """
+    x1_min, y1_min, x1_max, y1_max = box1
+    x2_min, y2_min, x2_max, y2_max = box2
+
     # Hitung koordinat interseksi
-    xi1 = max(x1, x2)
-    yi1 = max(y1, y2)
-    xi2 = min(x1 + w1, x2 + w2)
-    yi2 = min(y1 + h1, y2 + h2)
-    
+    xi1 = max(x1_min, x2_min)
+    yi1 = max(y1_min, y2_min)
+    xi2 = min(x1_max, x2_max)
+    yi2 = min(y1_max, y2_max)
+
     # Hitung luas interseksi
     inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
-    box1_area = w1 * h1
-    box2_area = w2 * h2    
-    
-    # Hitung IoU
-    iou_score = inter_area / box1_area
-    return iou_score
+    box1_area = (x1_max - x1_min) * (y1_max - y1_min)
+
+    # Cek apakah minimal 80% box1 berada dalam box2
+    return inter_area / box1_area if box1_area != 0 else 0
 
 
 
-def merge_track_ids(tracking_results):
-    """Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with 'Truk'."""
+def merge_track_ids(tracking_results, id_merge):
+    """
+    Assign the same track ID to 'Tampak Depan' and 'Tampak Samping' if they overlap with a 'Truk'.
+    Uses a dictionary to avoid recomputing IOU for the same track IDs.
+    """
     truck_tracks = []
+    
+    # Kumpulkan semua bounding box untuk "Truk"
     for track in tracking_results:
         if track['class_name'] in ["Truk Besar", "Truk Kecil"]:
             truck_tracks.append((track['track_id'], track['bounding box']))
     
     updated_tracks = []
+    
     for track in tracking_results:
-        track_id = track['track_id']
-        if track['class_name'] in ["Tampak Depan", "Tampak Samping"]:
-            for truck_id, truck_bbox in truck_tracks:
-                if iou(track['bounding box'], truck_bbox) > 0.3:
-                    track_id = truck_id
-                    break
-        
+        old_id = track['track_id']
+        class_name = track['class_name']
+        bbox = track['bounding box']
+
+        # Cek apakah track ini perlu digabungkan ke ID truk
+        if class_name in ["Tampak Depan", "Tampak Samping"]:
+            if old_id in id_merge:
+                # Gunakan ID yang sudah dipetakan
+                new_id = id_merge[old_id]
+            else:
+                # Cek IOU dengan setiap truk
+                new_id = old_id  # default pakai ID lama
+                for truck_id, truck_bbox in truck_tracks:
+                    if iou(bbox, truck_bbox) >= 0.8:
+                        new_id = truck_id
+                        id_merge[old_id] = truck_id  # simpan mapping
+                        break
+        else:
+            new_id = old_id
+        #print(f"id mapping {id_mapping}")
         updated_tracks.append({
-            'track_id': track_id,
-            'class_name': track['class_name'],
-            'bounding box': track['bounding box'],
+            'track_id': new_id,
+            'class_name': class_name,
+            'bounding box': bbox,
             'kp': track['kp'],
             'des': track['des'],
             'mask': track['mask']
         })
 
     return updated_tracks
+
