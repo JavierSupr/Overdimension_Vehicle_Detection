@@ -283,7 +283,7 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                         #(f"tracking result {tracking_results1}")
                         tracked_objects1 = merge_track_ids(tracking_results1, id_merge)
                         reference_height1 = compute_reference_height(tracked_objects1, tampak_depan_data1)
-                        #final_heights1, height_records1, passed_limits1 = estimate_height(tracked_objects1, reference_height1, height_records1, passed_limits1, final_heights1)
+                        final_heights1, height_records1, passed_limits1 = estimate_height(tracked_objects1, reference_height1, height_records1, passed_limits1, final_heights1)
                         shared_data[key_name][:] = []
                         for track in tracked_objects1:
                             if track["class_name"] == "Tampak Depan":
@@ -368,17 +368,18 @@ def process_and_stream_frames(video_port, result_port, camera_name, queue, video
                                     "mask": track["mask"]
                                 }
                                 shared_data[key_name].append(data)  
+                        print(f"height records {height_records2}")
                     
                     except Exception as e:
                         print(f"Error processing Camera 2: {e}")
                         continue
             if not queue.full() and frame is not None and frame.size > 0:
                 queue.put((camera_name, frame))
-            #height, width = frame.shape[:2]
-            #line_x1 = int((1 / 2) * width)  # x-coordinate at 2/5 of frame width
+            height, width = frame.shape[:2]
+            line_x1 = int((0.34) * width)  # x-coordinate at 2/5 of frame width
             #line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
             # Draw the vertical blue line
-            #cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
+            cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
             #cv2.line(frame, (line_x2, 0), (line_x2, height), (255, 0, 0), 2)  # Blue color (BGR)
 
             if frame is not None and frame.size > 0:
@@ -407,7 +408,7 @@ if __name__ == "__main__":
     #video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/20241019_114942.mp4"
     #video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 7/Penulisan Ilmiah/Dokumentasi/Video TA/WIN_20241019_11_49_42_Pro.mp4"
     video_path1 = "C:/Users/javie/Documents/Kuliah/Semester 8/Dataset/Pengujian/Merged/20250428_112538_4.mp4"
-    video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 8/Dataset/Pengujian/Merged/20250428_112538_3.mp4"
+    video_path2 = "C:/Users/javie/Documents/Kuliah/Semester 8/Dataset/Pengujian/Merged/20250428_112538_1.mp4"
 
     try:
         manager = multiprocessing.Manager()
@@ -421,10 +422,10 @@ if __name__ == "__main__":
         process2 = multiprocessing.Process(target=start_process, args=(PORT_2, PORT_RESULT_2, "Camera 2", frame_queue, video_path2, shared_data, "tracked_objects2"))
 
         #process_websocket.start()
-        process1.start()
+        #process1.start()
         process2.start()
 
-        process1.join()
+        #process1.join()
         process2.join()
         #process_websocket.join()
 

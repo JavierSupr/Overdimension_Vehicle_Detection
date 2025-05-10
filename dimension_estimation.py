@@ -1,7 +1,7 @@
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict, Counter
 
-REFERENCE_HEIGHT_METERS = 2.2 
+REFERENCE_HEIGHT_METERS = 1.7 
 height_records = {}
 frame_width = 640
 
@@ -38,7 +38,7 @@ def compute_height_from_mask(mask_xy, rounding=1.0):
     """
     if mask_xy is None or len(mask_xy) == 0:
         return None
-
+    #print(mask_xy)
     mask_xy = np.array(mask_xy)
     grouped_y = defaultdict(list)
 
@@ -57,13 +57,14 @@ def compute_height_from_mask(mask_xy, rounding=1.0):
             #print(f" {max(y_list)} - {min(y_list)} = {height}")
             if height > max_height:
                 max_height = height
+    #print(f"max height {max_height}")
     #print()
 
     return max_height
 
 def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
     estimated_heights = {}
-    left_limit = frame_width * (1/2)   # 1/4 of the screen width (exit point)
+    left_limit = frame_width * (0.34)   # 1/4 of the screen width (exit point)
     right_limit = frame_width * (7/8) 
 
     for track in tracking_results:
@@ -89,8 +90,8 @@ def estimate_height(tracking_results, tampak_depan_data, height_records, passed_
 
             if passed_limits[track['track_id']]["right"] == True and passed_limits[track['track_id']]["left"] == None:
                 if current_mask_height and known_mask_height:
-                    estimated_height = (current_mask_height / known_mask_height) * REFERENCE_HEIGHT_METERS
-
+                    estimated_height = (known_mask_height / current_mask_height) * REFERENCE_HEIGHT_METERS
+                    print(f"{current_mask_height}/{known_mask_height} = {estimated_height}")
                     if track['track_id'] not in height_records:
                         height_records[track['track_id']] = []
                     height_records[track['track_id']].append(estimated_height)
@@ -110,14 +111,22 @@ def estimate_height(tracking_results, tampak_depan_data, height_records, passed_
     return final_heights, height_records, passed_limits
 
 
-def get_final_estimated_heights(height_records, final_heights):
 
+def get_final_estimated_heights(height_records, final_heights):
     for track_id, heights in height_records.items():
         if heights:
-            final_heights[track_id] = np.mean(heights)
-            #print(f"final height {final_heights}")
-    
-    #for track_id, height in final_heights.items():
-        #print(f"Final Estimated Heights :Track ID {track_id}: {height:.2f} meters")
-    
+            # Pembulatan ke 1 angka di belakang koma
+            rounded_heights = [round(h, 1) for h in heights]
+            count = Counter(rounded_heights)
+
+            # Ambil hanya nilai dengan frekuensi >= 3
+            valid_heights = [h for h, c in count.items() if c >= 3]
+
+            if valid_heights:
+                # Pilih nilai terbesar dari yang valid
+                final_heights[track_id] = max(valid_heights)
+            else:
+                # Jika tidak ada yang frekuensinya >= 3, bisa pilih strategi fallback (misalnya None atau rata-rata)
+                final_heights[track_id] = None  # atau np.mean(rounded_heights)
+            print(f"FINAL HEIGHTS {final_heights}")
     return final_heights

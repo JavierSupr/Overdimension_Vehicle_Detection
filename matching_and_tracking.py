@@ -393,10 +393,13 @@ def process_tracks_and_extract_features(deepsort, sift, detections, frame, is_ca
                     matching_mask = det['mask']
                     # Menghitung IoU untuk perbandingan
                     iou = calculate_iou([x1, y1, x2, y2], [x, y, xw, yh])
-                    print(f"iou {iou}")
+                    #print(f"iou {iou}")
                     if iou >= 0.8 and class_id in detection_dict :
                         mask = matching_mask
-                        break  # Jika menemukan match, berhenti mencari lebih lanjut
+                        #print(f"ID: {unique_id} | {class_id} | color {det['bbox']} | iou {iou}| mask {mask}")
+
+                        break  # Jika menemukan match, berhenti mencari lebih 
+
 
                 if class_id == "Tampak Depan":
                     # Extract SIFT features for 'Tampak Depan'
@@ -422,9 +425,8 @@ def process_tracks_and_extract_features(deepsort, sift, detections, frame, is_ca
                         "kp": None,
                         "des": None,
                         "mask": mask
-                    })            # Untuk 'Truk' dan 'Tampak Samping', hanya simpan tracks & detections
-    print(f"tracking result {len(tracking_results)}")
-
+                    })       
+                mask = None
     return tracking_results, frame
 
 
@@ -432,32 +434,20 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
     """Draws tracking information on the frame, including bounding boxes, IDs, and estimated heights, and overlays masks."""
 
     height, width = frame.shape[:2]
-    line_x1 = int((1 / 2) * width)  # x-coordinate at 2/5 of frame width
+    line_x1 = int((0.34) * width)  # x-coordinate at 2/5 of frame width
     line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
     # Draw the vertical blue line
-    #cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
+    cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
     #cv2.line(frame, (line_x2, 0), (line_x2, height), (255, 0, 0), 2)  # Blue color (BGR)
-    count_tampak_depan = 0
-    count_truk = 0
-    seg2 = []
-    for result in tracking_results:
-        seg = result['mask'] 
-        class_name = result['class_name']
-
-        if class_name == "Tampak Depan" and seg is not None:
-            count_tampak_depan += 1
-            seg2.append(seg)
-
-        #sprint(f"Total kelas 'Tampak Depan': {count_tampak_depan} - {seg}")
     for track in tracking_results:
         track_id = track['track_id']
         x1, y1, x2, y2 = map(int, track['bounding box'])
         mask = track['mask']  # Assuming the mask is in the tracking result
         
-        if track['class_name'] == "Truk Besar" or track['class_name'] == "Truk Kecil":
+        if track['class_name'] == "Truk Besar":
             color = (0, 255, 0)  # Green
-        #elif track['class_name'] == "Truk Kecil":
-        #    color = (255, 255, 0)  # Green
+        elif track['class_name'] == "Truk Kecil":
+            color = (255, 255, 0)  # Green
         elif track['class_name'] == "Tampak Samping":
             color = (0, 255, 255)  # Yellow
         elif track['class_name'] == "Tampak Depan":
@@ -469,9 +459,8 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
         # Draw ID and class name
-        label = f'ID: {track_id}'
+        label = f'ID: {track_id} | {track["class_name"]}'
         cv2.putText(frame, label, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
         # Overlay mask if available
         if mask is not None and len(mask) > 0:
             mask = np.array(mask, dtype=np.int32)  # Convert list to np.array
@@ -479,5 +468,5 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
             
             overlay = frame.copy()
             cv2.fillPoly(overlay, [mask], color)    # Warnai polygon di overlay
-            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend overlay ke frame
+            frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)  # atau coba 0.8 / 0.2  # Blend overlay ke frame
     return frame
