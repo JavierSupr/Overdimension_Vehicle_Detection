@@ -24,7 +24,7 @@ def check_id_exists(track_id, camera_name=None):
     
     return collection.find_one(query)
 
-def draw_mask_on_detected_tracks(frame, tracked_objects):
+def draw_mask_on_detected_tracks(frame, tracked_objects, track_id):
     """
     Draws the segmentation mask for detected objects on the frame with different colors based on class names.
     Ensures that each track_id is drawn only once.
@@ -42,45 +42,41 @@ def draw_mask_on_detected_tracks(frame, tracked_objects):
         "Tampak Samping": (0, 255, 0),  # Green
         "Truk": (0, 0, 255)  # Red
     }
-    drawn_track_ids = set()
     truck_bbox = []
     #print(f" tracked object {tracked_objects}")
 
     for track in tracked_objects:
+        if track['track_id'] == track_id:
         #print(f"track {track}")
-        track_id = track['track_id']
-        drawn_track_ids.add(track_id)
-
-        if track_id not in drawn_track_ids:
-            continue  # Skip if this ID has already been processed
-
-        mask = track['mask']
-        #print(f"track.get mask {track['mask']}")
-        #print(f"track_id2 {track['track_id']}")
-        class_name = track.get('class_name')
-        #print(f"track.get('class_name') {track.get('class_name')}")
-
-        if mask is not None and len(mask) > 0 and class_name in class_colors:
-            color = class_colors[class_name]
+            track_id = track['track_id']
             
-            mask = np.array(mask, dtype=np.int32)  # Convert list to np.array with int32
-            mask = mask.reshape((-1, 1, 2))   
-            # Create an overlay for transparency
-            overlay = frame.copy()
-            cv2.fillPoly(overlay, [mask], color)  # Draw mask
-            frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend mask with frame
-            # Draw bounding box
-            x1, y1, x2, y2 = track.get("bounding box")
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            height, width = frame.shape[:2]
-            if class_name == "Tampak Depan":
-            # Clamp values to stay within the image bounds
-                x1 = max(0, min(x1, width - 1))
-                y1 = max(0, min(y1, height - 1))
-                x2 = max(0, min(x2, width - 1))
-                y2 = max(0, min(y2, height - 1))
+            mask = track['mask']
+            #print(f"track.get mask {track['mask']}")
+            #print(f"track_id2 {track['track_id']}")
+            class_name = track.get('class_name')
+            #print(f"track.get('class_name') {track.get('class_name')}")
 
-                truck_bbox.append((x1, y1, x2, y2))
+            if mask is not None and len(mask) > 0 and class_name in class_colors:
+                color = class_colors[class_name]
+
+                mask = np.array(mask, dtype=np.int32)  # Convert list to np.array with int32
+                mask = mask.reshape((-1, 1, 2))   
+                # Create an overlay for transparency
+                overlay = frame.copy()
+                cv2.fillPoly(overlay, [mask], color)  # Draw mask
+                frame = cv2.addWeighted(overlay, 0.4, frame, 0.6, 0)  # Blend mask with frame
+                # Draw bounding box
+                x1, y1, x2, y2 = track.get("bounding box")
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                height, width = frame.shape[:2]
+                if class_name == "Tampak Depan":
+                # Clamp values to stay within the image bounds
+                    x1 = max(0, min(x1, width - 1))
+                    y1 = max(0, min(y1, height - 1))
+                    x2 = max(0, min(x2, width - 1))
+                    y2 = max(0, min(y2, height - 1))
+
+                    truck_bbox.append((x1, y1, x2, y2))
 
 
     return frame, truck_bbox
@@ -120,6 +116,7 @@ def save_violation_to_mongodb(frame_captured, track_id, height, is_multicam, cam
         #print(f"truck bbox {truck_bbox}")
         # Deteksi plat nomor
         plates = detect_license_plate(frame, truck_bbox)
+        #print(f"plates {plates} - {camera_name}")
 
         license_plate_text, license_plate_img = extract_license_plate_text(frame, plates)
 
@@ -140,54 +137,53 @@ def save_violation_to_mongodb(frame_captured, track_id, height, is_multicam, cam
 
         existing_data = check_id_exists(track_id)
 
-        if is_multicam:
+        #if is_multicam:
             # Existing document update logic...
-            if existing_data is not None:
-                if camera_name == "Camera 1":
-                    existing_doc = collection.find_one({"track_id": track_id})
-                    if existing_doc and existing_doc.get("camera") != camera_name:
-                        existing_camera1 = collection.find_one({
-                            "track_id": track_id,
-                            "additional_cameras.track_id": track_id
-                        })
-                        if not existing_camera1:
-                            print("Camera 1 masuk sebagai additional")
-                            collection.update_one(
-                                {"track_id": track_id},
-                                {"$push": {
-                                    "additional_cameras": {
-                                        "track_id": track_id,
-                                        "camera": camera_name,
-                                        "violationImageId": image_id,
-                                        "height": float(height)
-                                    }
-                                }}
-                            )
-                        is_multicam = False
-                elif camera_name == "Camera 2":
-                    existing_doc = collection.find_one({"track_id": track_id})
-                    if existing_doc and existing_doc.get("camera") != camera_name:
-                        existing_camera2 = collection.find_one({
-                            "track_id": track_id,
-                            "additional_cameras.track_id": track_id
-                        })
-                        if not existing_camera2:
-                            print("Camera 2 masuk sebagai additional")
-                            collection.update_one(
-                                {"track_id": track_id},
-                                {"$push": {
-                                    "additional_cameras": {
-                                        "track_id": track_id,
-                                        "camera": camera_name,
-                                        "violationImageId": image_id,
-                                        "height": float(height)
-                                    }
-                                }}
-                            )
-                        is_multicam = False
+        if existing_data is not None:
+            if camera_name == "Camera 1":
+                existing_doc = collection.find_one({"track_id": track_id})
+                if existing_doc and existing_doc.get("camera") != camera_name:
+                    existing_camera1 = collection.find_one({
+                        "track_id": track_id,
+                        "additional_cameras.track_id": track_id
+                    })
+                    if not existing_camera1:
+                        print("Camera 1 masuk sebagai additional")
+                        collection.update_one(
+                            {"track_id": track_id},
+                            {"$push": {
+                                "additional_cameras": {
+                                    "track_id": track_id,
+                                    "camera": camera_name,
+                                    "violationImageId": image_id,
+                                    "height": float(height)
+                                }
+                            }}
+                        )
+                    is_multicam = False
+            elif camera_name == "Camera 2":
+                existing_doc = collection.find_one({"track_id": track_id})
+                if existing_doc and existing_doc.get("camera") != camera_name:
+                    existing_camera2 = collection.find_one({
+                        "track_id": track_id,
+                        "additional_cameras.track_id": track_id
+                    })
+                    if not existing_camera2:
+                        print("Camera 2 masuk sebagai additional")
+                        collection.update_one(
+                            {"track_id": track_id},
+                            {"$push": {
+                                "additional_cameras": {
+                                    "track_id": track_id,
+                                    "camera": camera_name,
+                                    "violationImageId": image_id,
+                                    "height": float(height)
+                                }
+                            }}
+                        )
+                    is_multicam = False
         else:
-            # Insert new document
-            print(f"{camera_name} masuk sebagai main data")
+            print(f"{camera_name} masuk sebagai main data (multicam)")
             violation_data = {
                 'timestamp': timestamp,
                 'location': 'Jl. Pantura KM 23',
@@ -202,6 +198,24 @@ def save_violation_to_mongodb(frame_captured, track_id, height, is_multicam, cam
             collection.insert_one(violation_data)
             print(f"Violation saved for Track ID {track_id} with License Plate: {license_plate_text}")
 
+
+        #else:
+        #    # Insert new document
+        #    print(f"{camera_name} masuk sebagai main data")
+        #    violation_data = {
+        #        'timestamp': timestamp,
+        #        'location': 'Jl. Pantura KM 23',
+        #        'track_id': track_id,
+        #        'license_plate': license_plate_text,
+        #        'camera': camera_name,
+        #        'violationImageId': image_id,
+        #        'licensenumberid': licensenumber_id,  # 🔑 store license plate image ID here
+        #        'height': float(height),
+        #        'additional_cameras': []
+        #    }
+        #    collection.insert_one(violation_data)
+        #    print(f"Violation saved for Track ID {track_id} with License Plate: {license_plate_text}")
+
     except Exception as e:
-        print(f"Error saving violation for Track ID {track_id}: {e}")
+        print(f"Error saving violation for Track ID {track_id} {camera_name}: {e}")
         traceback.print_exc()  

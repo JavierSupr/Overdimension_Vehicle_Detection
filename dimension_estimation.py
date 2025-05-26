@@ -62,71 +62,123 @@ def compute_height_from_mask(mask_xy, rounding=1.0):
 
     return max_height
 
-def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights):
+def estimate_height(tracking_results, tampak_depan_data, height_records, passed_limits, final_heights, camera_name, id_mapping):
     estimated_heights = {}
-    left_limit = frame_width * (0.34)   # 1/4 of the screen width (exit point)
-    right_limit = frame_width * (7/8) 
+    truck_types_by_id = {}  # Menyimpan jenis truk per ID
+
+    if camera_name == "Camera 1":
+        left_limit = frame_width * (7/8)
+        right_limit = frame_width * (0.34)
+    else:  # Assume Camera 2
+        left_limit = frame_width * (0.22)
+        right_limit = frame_width * (7/8)
+
+    # --- Simpan jenis truk berdasarkan ID ---
+    for t in tracking_results:
+        if "Truk" in t['class_name']:
+            truck_types_by_id[t['track_id']] = t['class_name']
 
     for track in tracking_results:
-        if track['class_name'] == "Tampak Samping" and track['track_id'] in tampak_depan_data:
-            x_min, y_min, x_max, y_max = track['bounding box']  # Extract bounding box coordinates
+        track_id = track['track_id']
+        class_name = track['class_name']
 
-            if track['track_id'] not in passed_limits:
-                passed_limits[track['track_id']] = {"left": None, "right": False}
+        truck_type = truck_types_by_id.get(track_id)
+        if not truck_type:
+            continue  # Lewati jika tidak ada info jenis truk
 
-            # Check if object has crossed left limit
-            #if x_min <= left_limit:
-            #    passed_limits[track['track_id']]["left"] = True
+        # Tetapkan tinggi referensi
+        if truck_type == "Truk Kecil":
+            REFERENCE_HEIGHT_METERS = 1.7
+            tambahan_tinggi = 1.0
+        elif truck_type == "Truk Besar":
+            REFERENCE_HEIGHT_METERS = 2.2
+            tambahan_tinggi = 1.6
+        else:
+            continue
 
-            # Check if object has crossed right limit
-            if x_min <= right_limit:
-                passed_limits[track['track_id']]["right"] = True
+        # Proses hanya jika Tampak Samping dan ada data mask tampak depan
+        if class_name == "Tampak Samping" and track_id in tampak_depan_data:
+            x_min, y_min, x_max, y_max = track['bounding box']
 
-            if x_min >= right_limit:
-                continue
+            if track_id not in passed_limits:
+                passed_limits[track_id] = {"left": None, "right": False}
+
+            if camera_name == "Camera 1":
+                if x_max >= right_limit:
+                    passed_limits[track_id]["right"] = True
+                if x_max <= right_limit:
+                    continue
+            else:  # Camera 2
+                if x_min <= right_limit:
+                    passed_limits[track_id]["right"] = True
+                if x_min >= right_limit:
+                    continue
 
             current_mask_height = compute_height_from_mask(track['mask'])
-            known_mask_height = tampak_depan_data[track['track_id']]
+            known_mask_height = tampak_depan_data[track_id]
 
-            if passed_limits[track['track_id']]["right"] == True and passed_limits[track['track_id']]["left"] == None:
+            if passed_limits[track_id]["right"] and passed_limits[track_id]["left"] is None:
                 if current_mask_height and known_mask_height:
-                    estimated_height = (known_mask_height / current_mask_height) * REFERENCE_HEIGHT_METERS
-                    print(f"{current_mask_height}/{known_mask_height} = {estimated_height}")
-                    if track['track_id'] not in height_records:
-                        height_records[track['track_id']] = []
-                    height_records[track['track_id']].append(estimated_height)
+                    estimated_height = (current_mask_height / known_mask_height) * REFERENCE_HEIGHT_METERS
+                    if track_id not in height_records:
+                        height_records[track_id] = []
+                    height_records[track_id].append(estimated_height)
+                    estimated_heights[track_id] = estimated_height
 
-                    estimated_heights[track['track_id']] = estimated_height
-                    #print(f"height_records {height_records}")
-                #print(f"passed limits {passed_limits}")
-            # Check if the object is within the desired horizontal range
-                if x_min <= left_limit:
-                    passed_limits[track['track_id']]["left"] = True
-                    if (passed_limits[track['track_id']]["left"] and passed_limits[track['track_id']]["right"]):
-                        final_heights = get_final_estimated_heights(height_records, final_heights)
-                        passed_limits[track['track_id']]["right"] = False
+                if (camera_name == "Camera 1" and x_max >= left_limit) or \
+                   (camera_name == "Camera 2" and x_min <= left_limit):                    
+                    passed_limits[track_id]["left"] = True
+                    if passed_limits[track_id]["left"] and passed_limits[track_id]["right"]:
+                        final_heights = get_final_estimated_heights(height_records, final_heights,truck_types_by_id)
+                        #print(f"final estimates {list(final_estimates.items())[-1]}")
+                        ## Tambahkan tambahan_tinggi ke nilai final
+                        #last_tid, last_val = list(final_estimates.items())[-1]
+                        #truck_type = truck_types_by_id.get(last_tid, "")
+                        #print(f"tid {last_tid} - val {last_val} - truck_type {truck_type}")
+                        #if truck_type == "Truk Kecil":
+                        #    final_heights[last_tid] = last_val + 1.0
+                        #elif truck_type == "Truk Besar":
+                        #    final_heights[last_tid] = last_val + 1.6
+                        #else:
+                        #    print("masuk1")
+                        #    final_heights[last_tid] = last_val
+                        print(f"final heights {final_heights}")
+                        passed_limits[track_id]["right"] = False
+                    #print()
                     continue
-                
-    # Ensure function always returns values
+
     return final_heights, height_records, passed_limits
 
 
 
-def get_final_estimated_heights(height_records, final_heights):
-    for track_id, heights in height_records.items():
-        if heights:
-            # Pembulatan ke 1 angka di belakang koma
-            rounded_heights = [round(h, 1) for h in heights]
-            count = Counter(rounded_heights)
+def get_final_estimated_heights(height_records, final_heights, truck_types_by_id):
+    if not height_records:
+        return final_heights
 
-            # Ambil hanya nilai dengan frekuensi >= 3
-            valid_heights = [h for h, c in count.items() if c >= 3]
+    # Ambil hanya entry terakhir yang masuk
+    last_track_id = list(height_records.keys())[-1]
+    heights = height_records[last_track_id]
 
-            if valid_heights:
-                # Pilih nilai terbesar dari yang valid
-                final_heights[track_id] = max(valid_heights)
-            else:
-                # Jika tidak ada yang frekuensinya >= 3, bisa pilih strategi fallback (misalnya None atau rata-rata)
-                final_heights[track_id] = None  # atau np.mean(rounded_heights)
-            print(f"FINAL HEIGHTS {final_heights}")
+    if heights:
+        # Pembulatan ke 1 angka di belakang koma
+        rounded_heights = [round(h, 1) for h in heights]
+        count = Counter(rounded_heights)
+
+        # Ambil hanya nilai dengan frekuensi >= 3
+        valid_heights = [h for h, c in count.items() if c >= 2]
+
+        if valid_heights:
+            base_height = max(valid_heights)
+        else:
+            base_height = 0  # fallback, bisa diganti rata-rata misal np.mean(rounded_heights)
+
+        # Tambahkan tinggi berdasarkan jenis truk
+        truck_type = truck_types_by_id.get(last_track_id, "")
+        if truck_type == "Truk Kecil":
+            final_heights[last_track_id] = base_height + 1.0
+        elif truck_type == "Truk Besar":
+            final_heights[last_track_id] = base_height + 1.6
+        else:
+            final_heights[last_track_id] = base_height
+
     return final_heights

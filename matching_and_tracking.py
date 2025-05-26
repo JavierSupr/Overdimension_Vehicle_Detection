@@ -437,36 +437,48 @@ def draw_tracking_info(frame, tracking_results, is_cam1=True):
     line_x1 = int((0.34) * width)  # x-coordinate at 2/5 of frame width
     line_x2 = int((7 / 8) * width)  # x-coordinate at 2/5 of frame width
     # Draw the vertical blue line
-    cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
+    #cv2.line(frame, (line_x1, 0), (line_x1, height), (255, 0, 0), 2)  # Blue color (BGR)
     #cv2.line(frame, (line_x2, 0), (line_x2, height), (255, 0, 0), 2)  # Blue color (BGR)
     for track in tracking_results:
         track_id = track['track_id']
         x1, y1, x2, y2 = map(int, track['bounding box'])
         mask = track['mask']  # Assuming the mask is in the tracking result
         
-        if track['class_name'] == "Truk Besar":
-            color = (0, 255, 0)  # Green
-        elif track['class_name'] == "Truk Kecil":
-            color = (255, 255, 0)  # Green
-        elif track['class_name'] == "Tampak Samping":
-            color = (0, 255, 255)  # Yellow
+        #if track['class_name'] == "Truk Besar":
+        #    color = (0, 255, 0)  # Green
+        #elif track['class_name'] == "Truk Kecil":
+        #    color = (255, 255, 0)  # Green
+        if track['class_name'] == "Tampak Samping":
+            color = (255, 0, 0)  # Yellow
         elif track['class_name'] == "Tampak Depan":
             color = (0, 0, 255)  # Red
         else:
-            color = (255, 255, 255)  # Default white
+            color = (0, 0, 0)  # Default white
         
         # Draw bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         
         # Draw ID and class name
-        label = f'ID: {track_id} | {track["class_name"]}'
-        cv2.putText(frame, label, (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        # Overlay mask if available
+        label = f'ID: {track_id}'  # You can add more info if needed
+        font = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.5
+        thickness = 2
+
+        # Get text size
+        (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, thickness)
+        top_left = (x1, y1 - 25)
+        bottom_right = (x1 + text_width, y1 - 5)
+
+        # Draw background rectangle
+        cv2.rectangle(frame, top_left, bottom_right, color, -1)  # Black background
+
+        # Put the text on top of the background
+        cv2.putText(frame, label, (x1, y1 - 10), font, font_scale, (255, 255, 255), thickness)        # Overlay mask if available
         if mask is not None and len(mask) > 0:
             mask = np.array(mask, dtype=np.int32)  # Convert list to np.array
             mask = mask.reshape((-1, 1, 2))         # Bentuk ke format kontur OpenCV
             
             overlay = frame.copy()
             cv2.fillPoly(overlay, [mask], color)    # Warnai polygon di overlay
-            frame = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)  # atau coba 0.8 / 0.2  # Blend overlay ke frame
+            frame = cv2.addWeighted(overlay, 0.5, frame, 0.5, 0)  # atau coba 0.8 / 0.2  # Blend overlay ke frame
     return frame
